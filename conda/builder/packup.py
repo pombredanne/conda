@@ -1,3 +1,5 @@
+from __future__ import print_function, division, absolute_import
+
 import os
 import re
 import sys
@@ -6,24 +8,22 @@ import shutil
 import hashlib
 import tarfile
 import tempfile
-from os.path import abspath, basename, dirname, isfile, islink, join
+from os.path import abspath, basename, dirname, isdir, isfile, islink, join
 
-from conda.config import PACKAGES_DIR
-from conda.install import (linked, get_meta, prefix_placeholder,
-                           install_local_package)
-from conda.naming import split_canonical_name
+import conda.config as config
+import conda.install as install
+from conda.misc import install_local_packages
 
-import utils
 
 
 def conda_installed_files(prefix, exclude_self_build=False):
     """
-    Return the set of files which have been installed (using conda) info
-    given prefix.
+    Return the set of files which have been installed (using conda) into
+    a given prefix.
     """
     res = set()
-    for dist in linked(prefix):
-        meta = get_meta(dist, prefix)
+    for dist in install.linked(prefix):
+        meta = install.is_linked(prefix, dist)
         if exclude_self_build and 'file_hash' in meta:
             continue
         res.update(set(meta['files']))
@@ -31,8 +31,8 @@ def conda_installed_files(prefix, exclude_self_build=False):
 
 
 def get_installed_version(prefix, name):
-    for dist in linked(prefix):
-        n, v, b = split_canonical_name(dist)
+    for dist in install.linked(prefix):
+        n, v, b = dist.rsplit('-', 2)
         if n == name:
             return v
     return None
@@ -51,8 +51,8 @@ def walk_prefix(prefix):
     """
     res = set()
     prefix = abspath(prefix)
-    ignore = {'pkgs', 'envs', 'conda-meta', 'LICENSE.txt', 'info',
-              '.index', '.unionfs'}
+    ignore = {'pkgs', 'envs', 'conda-bld', 'conda-meta', '.conda_lock',
+              'users', 'LICENSE.txt', 'info', '.index', '.unionfs'}
     for fn in os.listdir(prefix):
         if fn in ignore:
             continue
@@ -100,15 +100,15 @@ def create_info(name, version, build_number, requires_py):
     d = dict(
         name = name,
         version = version,
-        platform = utils.PLATFORM,
-        arch = utils.ARCH_NAME,
+        platform = config.platform,
+        arch = config.arch_name,
         build_number = int(build_number),
         build = str(build_number),
-        requires = [],
+        depends = [],
     )
     if requires_py:
         d['build'] = ('py%d%d_' % requires_py) + d['build']
-        d['requires'].append('python %d.%d' % requires_py)
+        d['depends'].append('python %d.%d*' % requires_py)
     return d
 
 
@@ -123,12 +123,12 @@ def fix_shebang(tmp_dir, path):
     if not (m and 'python' in m.group()):
         return False
 
-    data = shebang_pat.sub('#!%s/bin/python' % prefix_placeholder,
+    data = shebang_pat.sub('#!%s/bin/python' % install.prefix_placeholder,
                            data, count=1)
     tmp_path = join(tmp_dir, basename(path))
     with open(tmp_path, 'w') as fo:
         fo.write(data)
-    os.chmod(tmp_path, 0755)
+    os.chmod(tmp_path, int('755', 8))
     return True
 
 
@@ -170,8 +170,8 @@ def create_conda_pkg(prefix, files, info, tar_path, update_info=None):
             path = join(tmp_dir, basename(path))
             has_prefix.append(f)
         t.add(path, f)
-        h.update(f)
-        h.update('\x00')
+        h.update(f.encode('utf-8'))
+        h.update(b'\x00')
         if islink(path):
             link = os.readlink(path)
             h.update(link)
@@ -196,9 +196,9 @@ def make_tarbz2(prefix, name='unknown', version='0.0', build_number=0,
                 files=None):
     if files is None:
         files = untracked(prefix)
-    print "# files: %d" % len(files)
+    print("# files: %d" % len(files))
     if len(files) == 0:
-        print "# failed: nothing to do"
+        print("# failed: nothing to do")
         return None
 
     if any('/site-packages/' in f for f in files):
@@ -211,8 +211,8 @@ def make_tarbz2(prefix, name='unknown', version='0.0', build_number=0,
     info = create_info(name, version, build_number, requires_py)
     tarbz2_fn = '%(name)s-%(version)s-%(build)s.tar.bz2' % info
     create_conda_pkg(prefix, files, info, tarbz2_fn)
-    print '# success'
-    print tarbz2_fn
+    print('# success')
+    print(tarbz2_fn)
     return tarbz2_fn
 
 
@@ -236,7 +236,39 @@ def packup_and_reinstall(prefix, ignore_files, pkg_name, pkg_version=None):
     if fn is None:
         return
     remove(prefix, files)
-    install_local_package(fn, PACKAGES_DIR, prefix)
+    install_local_packages(prefix, [fn])
+
+
+def which_prefix(path):
+    """
+    given the path (to a (presumably) conda installed file) return the
+    environment prefix in which the file in located
+    """
+    prefix = abspath(path)
+    while True:
+        if isdir(join(prefix, 'conda-meta')):
+            # we found the it, so let's return it
+            return prefix
+        if prefix == dirname(prefix):
+            # we cannot chop off any more directories, so we didn't find it
+            return None
+        prefix = dirname(prefix)
+
+
+def which_package(path):
+    """
+    given the path (of a (presumably) conda installed file) iterate over
+    the conda packages the file came from.  Usually the iteration yields
+    only one package.
+    """
+    path = abspath(path)
+    prefix = which_prefix(path)
+    if prefix is None:
+        raise RuntimeError("could not determine conda prefix from: %s" % path)
+    for dist in install.linked(prefix):
+        meta = install.is_linked(prefix, dist)
+        if any(abspath(join(prefix, f)) == path for f in meta['files']):
+            yield dist
 
 
 if __name__ == '__main__':

@@ -1,3 +1,163 @@
+2013-XX-XX   2.0.0:
+-------------------
+  * added user/root mode and ability to soft-link across filesystems
+  * fixed behavior when installing into an environment which does not
+    exist yet, i.e. an error occurs
+  * fixed install --no-deps option
+
+
+2013-09-06   1.9.1:
+-------------------
+  * fix bug in new caching of repodata index
+
+
+2013-09-05   1.9.0:
+-------------------
+  * add caching of repodata index
+  * add activate command on Windows
+  * add conda package --which option, closes issue 163
+  * add ability to install file which contains multiple packages, issue 256
+  * move conda share functionality to conda package --share
+  * update documentation
+  * improve error messages when external dependencies are unavailable
+  * add implementation for issue 194: post-link or pre-unlink may append
+    to a special file ${PREFIX}/.messages.txt for messages, which is display
+    to the user's console after conda completes all actions
+  * add conda search --outdated option, which lists only installed packages
+    for which newer versions are available
+  * fixed numerous Py3k issues, in particular with the build command
+
+
+2013-08-16   1.8.2:
+-------------------
+  * add conda build --check option
+  * add conda clean --lock option
+  * fixed error in recipe causing conda traceback, issue 158
+  * fixes conda build error in Python 3, issue 238
+  * improve error message when test command fails, as well as issue 229
+  * disable Python (and other packages which are used by conda itself)
+    to be updated in root environment on Windows
+  * simplified locking, in particular locking should never crash conda
+    when files cannot be created due to permission problems
+
+
+2013-08-07   1.8.1:
+-------------------
+  * fixed conda update for no arguments, issue 237
+  * fix setting prefix before calling should_do_win_subprocess()
+    part of issue 235
+  * add basic subversion support when building
+  * add --output option to conda build
+
+
+2013-07-31   1.8.0:
+-------------------
+  * add Python 3 support (thanks almarklein)
+  * add Mercurial support when building from source (thanks delicb)
+  * allow Python (and other packages which are used by conda itself)
+    to be updated in root environment on Windows
+  * add conda config command
+  * add conda clean command
+  * removed the conda pip command
+  * improve locking to be finer grained
+  * made activate/deactivate work with zsh (thanks to mika-fischer)
+  * allow conda build to take tarballs containing a recipe as arguments
+  * add PKG_CONFIG_PATH to build environment variables
+  * fix entry point scripts pointing to wrong python when building Python 3
+    packages
+  * allow source/sha1 in meta.yaml, issue 196
+  * more informative message when there are unsatisfiable package
+    specifications
+  * ability to set the proxy urls in condarc
+  * conda build asks to upload to binstar. This can also be configured by
+    changing binstar_upload in condarc.
+  * basic tab completion if the argcomplete package is installed and eval
+    "$(register-python-argcomplete conda)" is added to the bash profile.
+
+
+2013-07-02   1.7.2:
+-------------------
+  * fixed conda update when packages include a post-link step which was
+    caused by subprocess being lazily imported, fixed by 0d0b860
+  * improve error message when 'chrpath' or 'patch' is not installed and
+    needed by build framework
+  * fixed sharing/cloning being broken (issue 179)
+  * add the string LOCKERROR to the conda lock error message
+
+
+2013-06-21   1.7.1:
+-------------------
+  * fix "executable" not being found on Windows when ending with .bat when
+    launching application
+  * give a better error message from when a repository does not exist
+
+
+2013-06-20   1.7.0:
+-------------------
+  * allow ${PREFIX} in app_entry
+  * add binstar upload information after conda build finishes
+
+
+2013-06-20   1.7.0a2:
+---------------------
+  * add global conda lock file for only allowing one instance of conda
+    to run at the same time
+  * add conda skeleton command to create recipes from PyPI
+  * add ability to run post-link and pre-unlink script
+
+
+2013-06-13   1.7.0a1:
+---------------------
+  * add ability to build conda packages from "recipes", using the conda build
+    command, for some examples, see:
+    https://github.com/ContinuumIO/conda-recipes
+  * fixed bug in conda install --force
+  * conda update command no longer uses anaconda as default package name
+  * add proxy support
+  * added application API to conda.api module
+  * add -c/--channel and --override-channels flags (issue 121).
+  * add default and system meta-channels, for use in .condarc and with -c
+    (issue 122).
+  * fixed ability to install ipython=0.13.0 (issue 130)
+
+
+2013-06-05   1.6.0:
+-------------------
+  * update package command to reflect changes in repodata
+  * fixed refactoring bugs in share/clone
+  * warn when anaconda processes are running on install in Windows (should
+    fix most permissions errors on Windows)
+
+
+2013-05-31   1.6.0rc2:
+----------------------
+  * conda with no arguments now prints help text (issue 111)
+  * don't allow removing conda from root environment
+  * conda update python does no longer update to Python 3, also ensure that
+    conda itself is always installed into the root environment (issue 110)
+
+
+2013-05-30   1.6.0rc1:
+----------------------
+  * major internal refactoring
+  * use new "depends" key in repodata
+  * uses pycosat to solve constraints more efficiently
+  * add hard-linking on Windows
+  * fixed linking across filesystems (issue 103)
+  * add conda remove --features option
+  * added more tests, in particular for new dependency resolver
+  * add internal DSL to perform install actions
+  * add package size to download preview
+  * add conda install --force and --no-deps options
+  * fixed conda help command
+  * add conda remove --all option for removing entire environment
+  * fixed source activate on systems where sourcing a gives "bash" as $0
+  * add information about installed versions to conda search command
+  * removed known "locations"
+  * add output about installed packages when update and install do nothing
+  * changed default when prompted for y/n in CLI to yes
+
+
 2013-04-29   1.5.2:
 -------------------
   * fixed issue 59: bad error message when pkgs dir is not writable

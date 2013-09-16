@@ -4,10 +4,11 @@
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
-import re
-from conda.install import linked
+from __future__ import print_function, division, absolute_import
 
-from utils import add_parser_prefix, get_prefix
+import sys
+
+from conda.cli import common
 
 
 def configure_parser(sub_parsers):
@@ -16,14 +17,14 @@ def configure_parser(sub_parsers):
         description = "List linked packages in a conda environment.",
         help        = "List linked packages in a conda environment.",
     )
-    add_parser_prefix(p)
+    common.add_parser_prefix(p)
     p.add_argument(
         '-c', "--canonical",
         action  = "store_true",
         help    = "output canonical names of packages only",
     )
     p.add_argument(
-        'search_expression',
+        'regex',
         action  = "store",
         nargs   = "?",
         help    = "list only packages matching this regular expression",
@@ -31,31 +32,48 @@ def configure_parser(sub_parsers):
     p.set_defaults(func=execute)
 
 
-def execute(args, parser):
-    prefix = get_prefix(args)
-    pkgs = sorted(linked(prefix))
+def list_packages(prefix, regex=None, verbose=True):
+    import re
+    import conda.install as install
+    import os.path
 
-    matching = ""
-    if args.search_expression:
+    if not os.path.isdir(prefix):
+        sys.exit("""\
+Error: environment does not exist: %s
+#
+# Use 'conda create' to create an environment before listing its packages.""" % prefix)
+    pat = re.compile(regex, re.I) if regex else None
+
+    if verbose:
+        print('# packages in environment at %s:' % prefix)
+        print('#')
+
+    packages = False
+    for dist in sorted(install.linked(prefix)):
+        name = dist.rsplit('-', 2)[0]
+        if pat and pat.search(name) is None:
+            continue
+        if not verbose:
+            print(dist)
+            packages = True
+            continue
         try:
-            pat = re.compile(args.search_expression)
-        except:
-            raise RuntimeError("Could not understand search expression '%s'" %
-                               args.search_expression)
-        matching = " matching '%s'" % args.search_expression
-        pkgs = [pkg for pkg in pkgs if pat.search(pkg)]
+            info = install.is_linked(prefix, dist)
+            features = set(info.get('features', '').split())
+            print('%-25s %-15s %15s  %s' % (info['name'],
+                                            info['version'],
+                                            info['build'],
+                                            common.disp_features(features)) )
+        except: # IOError, KeyError, ValueError
+            print('%-25s %-15s %15s' % tuple(dist.rsplit('-', 2)))
+        packages = True
 
-    if args.canonical:
-        for pkg in pkgs:
-            print pkg
-        return
+    if not packages:
+        # Be Unix-friendly
+        sys.exit(1)
 
-    if len(pkgs) == 0:
-        print('no packages%s found in environment at %s:' %
-              (matching, prefix))
-        return
 
-    print 'packages%s in environment at %s:' % (matching, prefix)
-    print
-    for pkg in pkgs:
-        print '%-25s %-15s %15s' % tuple(pkg.rsplit('-', 2))
+def execute(args, parser):
+    prefix = common.get_prefix(args)
+
+    list_packages(prefix, args.regex, not args.canonical)

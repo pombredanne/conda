@@ -1,15 +1,22 @@
+from __future__ import print_function, division, absolute_import
+
+import os
 import sys
 import hashlib
-import platform
-from os.path import normpath, getmtime, getsize
+import shutil
+import tarfile
+import zipfile
+import subprocess
+from os.path import (dirname, getmtime, getsize, isdir, isfile,
+                     islink, join, normpath)
 
+if sys.version_info[0] < 3:
+    import urllib2
+else:
+    import urllib.request as urllib2
 
+from conda.utils import md5_file
 
-SYS_MAP = {'linux2': 'linux', 'darwin': 'osx', 'win32': 'win'}
-PLATFORM = SYS_MAP.get(sys.platform, 'unknown')
-
-BITS = int(platform.architecture()[0][:2])
-ARCH_NAME = {64: 'x86_64', 32: 'x86'}[BITS]
 
 
 def rel_lib(f):
@@ -20,23 +27,61 @@ def rel_lib(f):
         return normpath(f.count('/') * '../') + '/lib'
 
 
-def md5_file(path):
-    with open(path, 'rb') as fi:
-        h = hashlib.new('md5')
-        while True:
-            chunk = fi.read(262144)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
+def _check_call(args, **kwargs):
+    try:
+        subprocess.check_call(args, **kwargs)
+    except subprocess.CalledProcessError:
+        sys.exit('Command failed: %s' % ' '.join(args))
+
+
+def download(url, dst_path, md5=None):
+    try:
+        fi = urllib2.urlopen(url)
+    except urllib2.URLError:
+        raise urllib2.URLError("Error could not open URL: %r" % url)
+    data = fi.read()
+    fi.close()
+    if md5:
+        assert hashlib.md5(data).hexdigest() == md5
+    with open(dst_path, 'wb') as fo:
+        fo.write(data)
+
+
+def tar_xf(tarball, dir_path, mode='r:*'):
+    if tarball.endswith('.tar.xz'):
+        subprocess.check_call(['unxz', '-f', '-k', tarball])
+        tarball = tarball[:-3]
+    t = tarfile.open(tarball, mode)
+    t.extractall(path=dir_path)
+    t.close()
+
+
+def unzip(zip_path, dir_path):
+    z = zipfile.ZipFile(zip_path)
+    for name in z.namelist():
+        if name.endswith('/'):
+            continue
+        path = join(dir_path, *name.split('/'))
+        dp = dirname(path)
+        if not isdir(dp):
+            os.makedirs(dp)
+        with open(path, 'wb') as fo:
+            fo.write(z.read(name))
+    z.close()
+
+
+def rm_rf(path):
+    if islink(path) or isfile(path):
+        os.unlink(path)
+
+    elif isdir(path):
+        if sys.platform == 'win32':
+            subprocess.check_call(['cmd', '/c', 'rd', '/s', '/q', path])
+        else:
+            shutil.rmtree(path)
 
 
 def file_info(path):
     return {'size': getsize(path),
             'md5': md5_file(path),
             'mtime': getmtime(path)}
-
-
-if __name__ == '__main__':
-    print PLATFORM
-    print ARCH_NAME

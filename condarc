@@ -1,13 +1,15 @@
-# This is the default conda runtime configuration
+# This is a sample .condarc file
 
 # channel locations. These override conda defaults, i.e., conda will
-# search *only* the channels listed here, in the order given.
-channels:
-  - http://repo.continuum.io/pkgs/dev
-  - http://repo.continuum.io/pkgs/gpl
-  - http://repo.continuum.io/pkgs/free
+# search *only* the channels listed here, in the order given. Use "default" to
+# automatically include all default channels.
 
-# environment locations. These locations are in *addition* to the system
-# location at $ROOT_DIR/envs.
-locations:
-  - ~/envs
+channels:
+  - defaults
+  - http://some.custom/channel
+
+# Proxy settings
+#  http://[username]:[password]@[server]:[port]
+proxy_servers:
+    http: http://user:pass@corp.com:8080
+    https: https://user:pass@corp.com:8080

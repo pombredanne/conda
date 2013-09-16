@@ -1,4 +1,0 @@
-  * add ability build (relocate-able) conda package which contain
-    native object code
-  * use SAT solver
-  * "export" packages into other formats, e.g. RPM, wheel, eggs, ..

@@ -4,14 +4,22 @@
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
+import os
 import unittest
 from os.path import dirname, join
 
-from conda import config
+import conda.config as config
 
 
 # use condarc from source tree to run these tests against
-config.RC_PATH = join(dirname(dirname(__file__)), 'condarc')
+config.rc_path = join(dirname(dirname(__file__)), 'condarc')
+
+# unset CIO_TEST
+
+try:
+    del os.environ['CIO_TEST']
+except KeyError:
+    pass
 
 
 class TestConfig(unittest.TestCase):
@@ -19,39 +27,31 @@ class TestConfig(unittest.TestCase):
     # These tests are mostly to ensure API stability
 
     def test_globals(self):
-        self.assertTrue(config.CIO_DEFAULT_CHANNELS)
-        self.assertTrue(isinstance(config.CIO_DEFAULT_CHANNELS, list))
+        self.assertTrue(config.root_dir)
+        self.assertTrue(config.pkgs_dir)
+        self.assertTrue(config.envs_dir)
+        self.assertTrue(config.default_prefix)
+        self.assertTrue(config.platform)
+        self.assertTrue(config.bits)
+        self.assertTrue(config.subdir)
+        self.assertTrue(config.arch_name)
 
-        self.assertTrue(config.ROOT_DIR)
-        self.assertTrue(config.PACKAGES_DIR)
-        self.assertTrue(config.ENVS_DIR)
+#    def test_channel_urls(self):
+#        config.subdir = 'foo'
+#        urls = config.get_channel_urls()
+#        self.assertEqual(urls,
+#                         ['http://repo.continuum.io/pkgs/dev/foo/',
+#                          'http://repo.continuum.io/pkgs/gpl/foo/',
+#                          'http://repo.continuum.io/pkgs/free/foo/'])
 
-        self.assertTrue(config.DEFAULT_ENV_PREFIX)
-        self.assertTrue(config.RC_PATH)
 
-    def test_load_condrc(self):
-        rc = config._load_condarc("condarc")
-        self.assertEqual(rc.keys(), ['channels', 'locations'])
-        self.assertEqual(rc['locations'], ['~/envs'])
-        self.assertEqual(
-            rc['channels'],
-            ['http://repo.continuum.io/pkgs/dev',
-             'http://repo.continuum.io/pkgs/gpl',
-             'http://repo.continuum.io/pkgs/free']
-        )
+    def test_proxy_settings(self):
+        config.rc = config.load_condarc(config.rc_path)
+        servers = config.get_proxy_servers()
+        self.assertEqual(len(servers),2)
+        self.assertEqual(servers['http'],'http://user:pass@corp.com:8080')
+        self.assertEqual(servers['https'], 'https://user:pass@corp.com:8080')
 
-    def test_config(self):
-        conf = config.Config()
-        self.assertTrue(isinstance(conf.conda_version, str))
-        self.assertTrue(isinstance(conf.platform, str))
-        self.assertTrue(isinstance(conf.root_dir, str))
-        self.assertTrue(isinstance(conf.packages_dir, str))
-        self.assertTrue(isinstance(conf.system_location, str))
-        self.assertTrue(isinstance(conf.user_locations, list))
-        self.assertTrue(isinstance(conf.locations, list))
-        self.assertTrue(isinstance(conf.channel_base_urls, list))
-        self.assertTrue(isinstance(conf.channel_urls, list))
-        self.assertTrue(isinstance(conf.environment_paths, list))
 
 if __name__ == '__main__':
     unittest.main()

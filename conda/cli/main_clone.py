@@ -1,51 +1,53 @@
-import sys
-import json
-from os.path import isfile
+from __future__ import print_function, division, absolute_import
+
+from conda.cli import common
 from argparse import RawDescriptionHelpFormatter
 
-from utils import add_parser_prefix, add_parser_json, get_prefix
 
-from conda.builder.share import clone_bundle
-
-
-descr = 'Clone a "share package" (created using the share command)'
-
+descr = ('Clone an existing environment or a "share package" '
+         '(created by conda package --share)')
 
 def configure_parser(sub_parsers):
     p = sub_parsers.add_parser(
         'clone',
         formatter_class = RawDescriptionHelpFormatter,
         description = descr,
-        help        = descr,
+        help = descr,
     )
     p.add_argument(
         'path',
         metavar = 'PATH',
-        action  = "store",
-        nargs   = 1,
-        help    = 'path to "share package"',
+        action = "store",
+        nargs = 1,
+        help = 'path existing environment or "share package"',
     )
-    add_parser_prefix(p)
-    add_parser_json(p)
+    common.add_parser_prefix(p)
+    common.add_parser_json(p)
     p.set_defaults(func=execute)
 
 
 def execute(args, parser):
-    if (not args.name) and (not args.prefix):
-        raise RuntimeError('either -n NAME or -p PREFIX option required, '
-                           'try "conda create -h" for more details')
+    import sys
+    import json
+    from os.path import exists, isdir, isfile
 
-    prefix = get_prefix(args)
+
+    common.ensure_name_or_prefix(args, 'clone')
+
+    prefix = common.get_prefix(args, search=False)
+    if exists(prefix):
+        sys.exit("Error: prefix already exists: %s" % prefix)
+
     path = args.path[0]
-    if not isfile(path):
-        raise RuntimeError("no such file: %s" % path)
-
-    warnings = []
-    for w in clone_bundle(path, prefix):
+    if isfile(path):
+        from conda.builder.share import clone_bundle
+        clone_bundle(path, prefix)
         if args.json:
-            warnings.append(w)
-        else:
-            print "Warning:", w
+            json.dump(dict(warnings=[]), sys.stdout, indent=2)
 
-    if args.json:
-        json.dump(dict(warnings=warnings), sys.stdout, indent=2)
+    elif isdir(path):
+        from conda.misc import clone_env
+        clone_env(path, prefix)
+
+    else:
+        sys.exit("Error: no such file or directory: %s" % path)

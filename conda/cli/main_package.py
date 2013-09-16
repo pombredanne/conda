@@ -4,10 +4,10 @@
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
-from os.path import basename
+from __future__ import print_function, division, absolute_import
 
-from conda.builder.packup import make_tarbz2, untracked, remove
-from utils import add_parser_prefix, get_prefix
+from conda.cli import common
+
 
 descr = "Create a conda package in an environment. (ADVANCED)"
 
@@ -15,13 +15,16 @@ descr = "Create a conda package in an environment. (ADVANCED)"
 def configure_parser(sub_parsers):
     p = sub_parsers.add_parser('package', description=descr, help=descr)
 
-    add_parser_prefix(p)
-
+    common.add_parser_prefix(p)
     p.add_argument(
         '-c', "--check",
-        action  = "store",
-        help    = "check (validate) the given tar package and exit",
-        metavar = 'PATH',
+        action  = "store_true",
+        help    = "check (validate) the given conda packages (PATH) and exit",
+    )
+    p.add_argument(
+        '-w', "--which",
+        action = "store_true",
+        help = "given some PATH print which conda package the file came from",
     )
     p.add_argument(
         '-r', "--reset",
@@ -33,7 +36,11 @@ def configure_parser(sub_parsers):
         action  = "store_true",
         help    = "display all untracked files and exit",
     )
-
+    p.add_argument(
+        "--share",
+        action  = "store_true",
+        help = 'Create a "share package"',
+    )
     p.add_argument(
         "--pkg-name",
         action  = "store",
@@ -52,24 +59,48 @@ def configure_parser(sub_parsers):
         default = 0,
         help    = "package build number of the created package",
     )
+    p.add_argument(
+        'path',
+        metavar = 'PATH',
+        action = "store",
+        nargs = '*',
+    )
     p.set_defaults(func=execute)
 
 
 def execute(args, parser):
-    prefix = get_prefix(args)
+    import sys
+    from os.path import basename
+
+    from conda.builder.packup import make_tarbz2, untracked, remove
+
+
+    prefix = common.get_prefix(args)
 
     if args.check:
         from conda.builder.tarcheck import check_all
 
-        try:
-            check_all(args.check)
-            print '%s OK' % basename(args.check)
-        except Exception as e:
-            print e
-            print '%s FAILED' % basename(args.check)
+        for path in args.path:
+            try:
+                check_all(path)
+                print('%s OK' % basename(path))
+            except Exception as e:
+                print(e)
+                print('%s FAILED' % basename(path))
         return
 
-    print '# prefix:', prefix
+    if args.which:
+        from conda.builder.packup import which_package
+
+        for path in args.path:
+            for dist in  which_package(path):
+                print('%-50s  %s' % (path, dist))
+        return
+
+    if args.path:
+        sys.exit("Error: no positional arguments expected.")
+
+    print('# prefix:', prefix)
 
     if args.reset:
         remove(prefix, untracked(prefix))
@@ -77,9 +108,18 @@ def execute(args, parser):
 
     if args.untracked:
         files = sorted(untracked(prefix))
-        print '# untracked files: %d' % len(files)
+        print('# untracked files: %d' % len(files))
         for fn in files:
-            print fn
+            print(fn)
+        return
+
+    if args.share:
+        from conda.builder.share import create_bundle
+
+        path, warnings = create_bundle(prefix)
+        for w in warnings:
+            print("Warning:", w)
+        print(path)
         return
 
     make_tarbz2(prefix,

@@ -24,21 +24,108 @@ standalone, i.e. not import any other parts of `conda` (only depend on
 the standard library).
 
 '''
+
+from __future__ import print_function, division, absolute_import
+
 import os
 import json
 import shutil
 import stat
 import sys
+import subprocess
 import tarfile
 import traceback
 import logging
 from os.path import abspath, basename, dirname, isdir, isfile, islink, join
 
+try:
+    from conda.lock import Locked
+except ImportError:
+    # Make sure this still works as a standalone script for the Anaconda
+    # installer.
+    class Locked(object):
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            pass
+        def __exit__(self, exc_type, exc_value, traceback):
+            pass
+
+on_win = bool(sys.platform == 'win32')
+
+if on_win:
+    import ctypes
+    from ctypes import wintypes
+
+    # on Windows we cannot update these packages in the root environment
+    # because of the file lock problem
+    win_ignore_root = set(['python', 'pycosat', 'menuinst', 'psutil'])
+
+    CreateHardLink = ctypes.windll.kernel32.CreateHardLinkW
+    CreateHardLink.restype = wintypes.BOOL
+    CreateHardLink.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR,
+                               wintypes.LPVOID]
+    try:
+        CreateSymbolicLink = ctypes.windll.kernel32.CreateSymbolicLinkW
+        CreateSymbolicLink.restype = wintypes.BOOL
+        CreateSymbolicLink.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                       wintypes.DWORD]
+    except AttributeError:
+        CreateSymbolicLink = None
+
+    def win_hard_link(src, dst):
+        "Equivalent to os.link, using the win32 CreateHardLink call."
+        if not CreateHardLink(dst, src, None):
+            raise OSError('win32 hard link failed')
+
+    def win_soft_link(src, dst):
+        "Equivalent to os.symlink, using the win32 CreateSymbolicLink call."
+        if CreateSymbolicLink is None:
+            raise OSError('win32 soft link not supported')
+        if not CreateSymbolicLink(dst, src, isdir(src)):
+            raise OSError('win32 soft link failed')
+
 
 log = logging.getLogger(__name__)
 
+class NullHandler(logging.Handler):
+    """ Copied from Python 2.7 to avoid getting
+        `No handlers could be found for logger "patch"`
+        http://bugs.python.org/issue16539
+    """
+    def handle(self, record):
+        pass
+    def emit(self, record):
+        pass
+    def createLock(self):
+        self.lock = None
 
-use_hard_links = bool(sys.platform != 'win32')
+log.addHandler(NullHandler())
+
+LINK_HARD = 1
+LINK_SOFT = 2
+LINK_COPY = 3
+link_name_map = {
+    LINK_HARD: 'hard',
+    LINK_SOFT: 'soft',
+    LINK_COPY: 'copy',
+}
+
+def _link(src, dst, linktype=LINK_HARD):
+    if linktype == LINK_HARD:
+        if on_win:
+            win_hard_link(src, dst)
+        else:
+            os.link(src, dst)
+    elif linktype == LINK_SOFT:
+        if on_win:
+            win_soft_link(src, dst)
+        else:
+            os.symlink(src, dst)
+    elif linktype == LINK_COPY:
+        shutil.copy2(src, dst)
+    else:
+        raise Exception("Did not expect linktype=%r" % linktype)
 
 
 def rm_rf(path):
@@ -50,6 +137,16 @@ def rm_rf(path):
 
     elif isdir(path):
         shutil.rmtree(path)
+
+def rm_empty_dir(path):
+    """
+    Remove the directory `path` if it is a directory and empty.
+    If the directory does not exist or is not empty, do nothing.
+    """
+    try:
+        os.rmdir(path)
+    except OSError: # directory might not exist or not be empty
+        pass
 
 
 def yield_lines(path):
@@ -66,28 +163,29 @@ prefix_placeholder = ('/opt/anaconda1anaconda2'
                       # will leave it unchanged
                       'anaconda3')
 def update_prefix(path, new_prefix):
-    with open(path) as fi:
+    with open(path, 'rb') as fi:
         data = fi.read()
-    new_data = data.replace(prefix_placeholder, new_prefix)
+    new_data = data.replace(prefix_placeholder.encode('utf-8'),
+                            new_prefix.encode('utf-8'))
     if new_data == data:
         return
     st = os.stat(path)
     os.unlink(path)
-    with open(path, 'w') as fo:
+    with open(path, 'wb') as fo:
         fo.write(new_data)
     os.chmod(path, stat.S_IMODE(st.st_mode))
 
 
-def create_meta(prefix, dist, info_dir, files):
+def create_meta(prefix, dist, info_dir, extra_info):
     """
     Create the conda metadata, in a given prefix, for a given package.
     """
     meta_dir = join(prefix, 'conda-meta')
     with open(join(info_dir, 'index.json')) as fi:
         meta = json.load(fi)
-    meta['files'] = files
+    meta.update(extra_info)
     if not isdir(meta_dir):
-        os.mkdir(meta_dir)
+        os.makedirs(meta_dir)
     with open(join(meta_dir, dist + '.json'), 'w') as fo:
         json.dump(meta, fo, indent=2, sort_keys=True)
 
@@ -109,52 +207,103 @@ def mk_menus(prefix, files, remove=False):
         try:
             menuinst.install(join(prefix, f), remove, prefix)
         except:
-            print("Appinst Exception:")
+            print("menuinst Exception:")
             traceback.print_exc(file=sys.stdout)
+
+
+def post_link(prefix, dist, unlink=False):
+    name = dist.rsplit('-', 2)[0]
+    path = join(prefix, 'Scripts' if on_win else 'bin', '.%s-%s.%s' % (
+            name,
+            'pre-unlink' if unlink else 'post-link',
+            'bat' if on_win else 'sh'))
+    if not isfile(path):
+        return
+    if on_win:
+        args = [os.environ['COMSPEC'], '/c', path]
+    else:
+        args = ['/bin/bash', path]
+    env = os.environ
+    env['PREFIX'] = prefix
+    subprocess.call(args, env=env)
 
 
 # ========================== begin API functions =========================
 
-# ------- things about available packages
+def try_write(dir_path):
+    path = join(dir_path, '.tmp-conda')
+    assert isdir(dir_path)
+    assert not isfile(path)
+    try:
+        with open(path, 'wb') as fo:
+            fo.write(b'This is a test file.\n')
+        return True
+    except IOError:
+        return False
+    finally:
+        rm_rf(path)
 
-def available(pkgs_dir):
+def try_hard_link(pkgs_dir, prefix, dist):
+    src = join(pkgs_dir, dist, 'info', 'index.json')
+    dst = join(prefix, '.tmp-%s' % dist)
+    assert isfile(src)
+    assert not isfile(dst)
+    if not isdir(prefix):
+        os.makedirs(prefix)
+    try:
+        _link(src, dst, LINK_HARD)
+        return True
+    except OSError:
+        return False
+    finally:
+        rm_rf(dst)
+        rm_empty_dir(prefix)
+
+# ------- package cache ----- fetched
+
+def fetched(pkgs_dir):
+    return set(fn[:-8] for fn in os.listdir(pkgs_dir)
+               if fn.endswith('.tar.bz2'))
+
+def is_fetched(pkgs_dir, dist):
+    return isfile(join(pkgs_dir, dist + '.tar.bz2'))
+
+def rm_fetched(pkgs_dir, dist):
+    with Locked(pkgs_dir):
+        path = join(pkgs_dir, dist + '.tar.bz2')
+        rm_rf(path)
+
+# ------- package cache ----- extracted
+
+def extracted(pkgs_dir):
     """
-    Return the (set of canonical names) of all available packages.
+    return the (set of canonical names) of all extracted packages
     """
-    if use_hard_links:
-        return set(fn for fn in os.listdir(pkgs_dir)
-                   if isdir(join(pkgs_dir, fn)))
-    else:
-        return set(fn[:-8] for fn in os.listdir(pkgs_dir)
-                   if fn.endswith('.tar.bz2'))
+    return set(dn for dn in os.listdir(pkgs_dir)
+               if (isfile(join(pkgs_dir, dn, 'info', 'files')) and
+                   isfile(join(pkgs_dir, dn, 'info', 'index.json'))))
 
+def extract(pkgs_dir, dist):
+    """
+    Extract a package, i.e. make a package available for linkage.  We assume
+    that the compressed packages is located in the packages directory.
+    """
+    with Locked(pkgs_dir):
+        path = join(pkgs_dir, dist)
+        t = tarfile.open(path + '.tar.bz2')
+        t.extractall(path=path)
+        t.close()
 
-def make_available(pkgs_dir, dist, cleanup=False):
-    '''
-    Make a package available for linkage.  We assume that the
-    compressed packages is located in the packages directory.
-    '''
-    bz2path = join(pkgs_dir, dist + '.tar.bz2')
-    assert isfile(bz2path), bz2path
-    if not use_hard_links:
-        return
-    t = tarfile.open(bz2path)
-    t.extractall(path=join(pkgs_dir, dist))
-    t.close()
-    if cleanup:
-        os.unlink(bz2path)
+def is_extracted(pkgs_dir, dist):
+    return (isfile(join(pkgs_dir, dist, 'info', 'files')) and
+            isfile(join(pkgs_dir, dist, 'info', 'index.json')))
 
+def rm_extracted(pkgs_dir, dist):
+    with Locked(pkgs_dir):
+        path = join(pkgs_dir, dist)
+        rm_rf(path)
 
-def remove_available(pkgs_dir, dist):
-    '''
-    Remove a package from the packages directory.
-    '''
-    bz2path = join(pkgs_dir, dist + '.tar.bz2')
-    rm_rf(bz2path)
-    if use_hard_links:
-        rm_rf(join(pkgs_dir, dist))
-
-# ------- things about linkage of packages
+# ------- linkage of packages
 
 def linked(prefix):
     """
@@ -166,7 +315,7 @@ def linked(prefix):
     return set(fn[:-5] for fn in os.listdir(meta_dir) if fn.endswith('.json'))
 
 
-def get_meta(dist, prefix):
+def is_linked(prefix, dist):
     """
     Return the install meta-data for a linked package in a prefix, or None
     if the package is not linked in the prefix.
@@ -175,28 +324,34 @@ def get_meta(dist, prefix):
     try:
         with open(meta_path) as fi:
             return json.load(fi)
-    except OSError:
+    except IOError:
         return None
 
 
-def link(pkgs_dir, dist, prefix):
+def link(pkgs_dir, prefix, dist, linktype=LINK_HARD):
     '''
     Set up a packages in a specified (environment) prefix.  We assume that
-    the packages has been make available (using make_available() above).
+    the packages has been extracted (using extract() above).
     '''
-    if (sys.platform == 'win32' and
-            abspath(prefix) == abspath(sys.prefix) and
-            dist.rsplit('-', 2)[0] == 'python'):
+    if (on_win and abspath(prefix) == abspath(sys.prefix) and
+              dist.rsplit('-', 2)[0] in win_ignore_root):
         # on Windows we have the file lock problem, so don't allow
-        # linking or unlinking python from the root environment
+        # linking or unlinking some packages
+        print('Ignored: %s' % dist)
         return
 
-    if use_hard_links:
-        dist_dir = join(pkgs_dir, dist)
-        info_dir = join(dist_dir, 'info')
-        files = list(yield_lines(join(info_dir, 'files')))
+    source_dir = join(pkgs_dir, dist)
+    info_dir = join(source_dir, 'info')
+    files = list(yield_lines(join(info_dir, 'files')))
+
+    try:
+        has_prefix_files = set(yield_lines(join(info_dir, 'has_prefix')))
+    except IOError:
+        has_prefix_files = set()
+
+    with Locked(prefix), Locked(pkgs_dir):
         for f in files:
-            src = join(dist_dir, f)
+            src = join(source_dir, f)
             fdn, fbn = os.path.split(f)
             dst_dir = join(prefix, fdn)
             if not isdir(dst_dir):
@@ -208,80 +363,87 @@ def link(pkgs_dir, dist, prefix):
                     os.unlink(dst)
                 except OSError:
                     log.error('failed to unlink: %r' % dst)
+            lt = (LINK_COPY if f in has_prefix_files or
+                  f.startswith('bin/python') else linktype)
             try:
-                os.link(src, dst)
+                _link(src, dst, lt)
+                log.debug('_link (src=%r, dst=%r, type=%r)' % (src, dst, lt))
             except OSError:
-                log.error('failed to link (src=%r, dst=%r)' % (src, dst))
+                log.error('failed to link (src=%r, dst=%r, type=%r)' %
+                          (src, dst, lt))
 
-    else: # cannot hard link files
-        info_dir = join(prefix, 'info')
-        rm_rf(info_dir)
-        t = tarfile.open(join(pkgs_dir, dist + '.tar.bz2'))
-        t.extractall(path=prefix)
-        t.close()
-        files = list(yield_lines(join(info_dir, 'files')))
+        if dist.rsplit('-', 2)[0]  == '_cache':
+            return
 
-    has_prefix_path = join(info_dir, 'has_prefix')
-    if isfile(has_prefix_path):
-        for f in yield_lines(has_prefix_path):
+        for f in sorted(has_prefix_files):
             update_prefix(join(prefix, f), prefix)
 
-    create_meta(prefix, dist, info_dir, files)
-    mk_menus(prefix, files, remove=False)
+        create_meta(prefix, dist, info_dir, {
+                'files': files,
+                'link': {'source': source_dir,
+                         'type': link_name_map.get(linktype)},
+                })
+        mk_menus(prefix, files, remove=False)
+        post_link(prefix, dist)
 
 
-def unlink(dist, prefix):
+def unlink(prefix, dist):
     '''
-    Remove a package from the specified environment, it is an error of the
+    Remove a package from the specified environment, it is an error if the
     package does not exist in the prefix.
     '''
-    if (sys.platform == 'win32' and
-            abspath(prefix) == abspath(sys.prefix) and
-            dist.rsplit('-', 2)[0] == 'python'):
+    if (on_win and abspath(prefix) == abspath(sys.prefix) and
+              dist.rsplit('-', 2)[0] in win_ignore_root):
         # on Windows we have the file lock problem, so don't allow
-        # linking or unlinking python from the root environment
+        # linking or unlinking some packages
+        print('Ignored: %s' % dist)
         return
 
-    meta_path = join(prefix, 'conda-meta', dist + '.json')
-    with open(meta_path) as fi:
-        meta = json.load(fi)
+    with Locked(prefix):
+        post_link(prefix, dist, unlink=True)
 
-    mk_menus(prefix, meta['files'], remove=True)
-    dst_dirs = set()
-    for f in meta['files']:
-        dst = join(prefix, f)
-        dst_dirs.add(dirname(dst))
-        try:
-            os.unlink(dst)
-        except OSError: # file might not exist
-            log.debug("could not remove file: '%s'" % dst)
+        meta_path = join(prefix, 'conda-meta', dist + '.json')
+        with open(meta_path) as fi:
+            meta = json.load(fi)
 
-    for path in sorted(dst_dirs, key=len, reverse=True):
-        try:
-            os.rmdir(path)
-        except OSError: # directory might not exist or not be empty
-            log.debug("could not remove directory: '%s'" % dst)
+        mk_menus(prefix, meta['files'], remove=True)
+        dst_dirs1 = set()
 
-    os.unlink(meta_path)
+        for f in meta['files']:
+            dst = join(prefix, f)
+            dst_dirs1.add(dirname(dst))
+            try:
+                os.unlink(dst)
+            except OSError: # file might not exist
+                log.debug("could not remove file: '%s'" % dst)
+
+        # remove the meta-file last
+        os.unlink(meta_path)
+
+        dst_dirs2 = set()
+        for path in dst_dirs1:
+            while len(path) > len(prefix):
+                dst_dirs2.add(path)
+                path = dirname(path)
+        # in case there is nothing left
+        dst_dirs2.add(join(prefix, 'conda-meta'))
+        dst_dirs2.add(prefix)
+
+        for path in sorted(dst_dirs2, key=len, reverse=True):
+            rm_empty_dir(path)
+
+
+def messages(prefix):
+    path = join(prefix, '.messages.txt')
+    try:
+        with open(path) as fi:
+            sys.stdout.write(fi.read())
+    except IOError:
+        pass
+    finally:
+        rm_rf(path)
 
 # =========================== end API functions ==========================
-
-def install_local_package(path, pkgs_dir, prefix):
-    assert path.endswith('.tar.bz2')
-    dist = basename(path)[:-8]
-    print '%s:' % dist
-    if dist in available(pkgs_dir):
-        print "    already available - removing"
-        remove_available(pkgs_dir, dist)
-    shutil.copyfile(path, join(pkgs_dir, dist + '.tar.bz2'))
-    print "    making available"
-    make_available(pkgs_dir, dist)
-    if dist in linked(prefix):
-        print "    already linked - unlinking"
-        unlink(dist, prefix)
-    print "    linking"
-    link(pkgs_dir, dist, prefix)
-
 
 def main():
     from pprint import pprint
@@ -296,18 +458,9 @@ def main():
                  action="store_true",
                  help="list all linked packages")
 
-    p.add_option('--list-available',
+    p.add_option('--extract',
                  action="store_true",
-                 help="list all available packages")
-
-    p.add_option('-i', '--info',
-                 action="store_true",
-                 help="display meta-data information of a linked package")
-
-    p.add_option('-m', '--make-available',
-                 action="store_true",
-                 help="make a package available (when we use hard like this "
-                      "means extracting it)")
+                 help="extract package in pkgs cache")
 
     p.add_option('--link',
                  action="store_true",
@@ -316,10 +469,6 @@ def main():
     p.add_option('--unlink',
                  action="store_true",
                  help="unlink a package")
-
-    p.add_option('-r', '--remove',
-                 action="store_true",
-                 help="remove a package (from being available)")
 
     p.add_option('-p', '--prefix',
                  action="store",
@@ -333,7 +482,7 @@ def main():
 
     p.add_option('--link-all',
                  action="store_true",
-                 help="link all available (extracted) packages")
+                 help="link all extracted packages")
 
     p.add_option('-v', '--verbose',
                  action="store_true")
@@ -342,7 +491,7 @@ def main():
 
     logging.basicConfig()
 
-    if opts.list or opts.list_available or opts.link_all:
+    if opts.list or opts.extract or opts.link_all:
         if args:
             p.error('no arguments expected')
     else:
@@ -353,60 +502,29 @@ def main():
         else:
             p.error('exactly one argument expected')
 
+    pkgs_dir = opts.pkgs_dir
+    prefix = opts.prefix
     if opts.verbose:
-        print "pkgs_dir: %r" % opts.pkgs_dir
-        print "prefix  : %r" % opts.prefix
-        print "dist    : %r" % dist
+        print("pkgs_dir: %r" % pkgs_dir)
+        print("prefix  : %r" % prefix)
+        print("dist    : %r" % dist)
 
     if opts.list:
-        pprint(sorted(linked(opts.prefix)))
-        return
+        pprint(sorted(linked(prefix)))
 
-    if opts.list_available:
-        pprint(sorted(available(opts.pkgs_dir)))
-        return
+    elif opts.link_all:
+        for dist in sorted(extracted(pkgs_dir)):
+            link(pkgs_dir, prefix, dist)
+        messages(prefix)
 
-    if opts.info:
-        pprint(get_meta(dist, opts.prefix))
-        return
+    elif opts.extract:
+        extract(pkgs_dir, dist)
 
-    if opts.link_all:
-        for d in sorted(available(opts.pkgs_dir)):
-            link(opts.pkgs_dir, d, opts.prefix)
-        return
+    elif opts.link:
+        link(pkgs_dir, prefix, dist)
 
-    do_steps = not (opts.remove or opts.make_available or opts.link or
-                    opts.unlink)
-    if opts.verbose:
-        print "do_steps: %r" % do_steps
-
-    if do_steps:
-        path = args[0]
-        if not (path.endswith('.tar.bz2') and isfile(path)):
-            p.error('path .tar.bz2 package expected')
-
-    if do_steps or opts.remove:
-        if opts.verbose:
-            print "removing available package: %r" % dist
-        remove_available(opts.pkgs_dir, dist)
-
-    if do_steps:
-        shutil.copyfile(path, join(opts.pkgs_dir, dist + '.tar.bz2'))
-
-    if do_steps or opts.make_available:
-        if opts.verbose:
-            print "making available: %r" % dist
-        make_available(opts.pkgs_dir, dist)
-
-    if (do_steps and dist in linked(opts.prefix)) or opts.unlink:
-        if opts.verbose:
-            print "unlinking: %r" % dist
-        unlink(dist, opts.prefix)
-
-    if do_steps or opts.link:
-        if opts.verbose:
-            print "linking: %r" % dist
-        link(opts.pkgs_dir, dist, opts.prefix)
+    elif opts.unlink:
+        unlink(prefix, dist)
 
 
 if __name__ == '__main__':

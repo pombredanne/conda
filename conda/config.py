@@ -1,209 +1,178 @@
-# (c) 2012 Continuum Analytics, Inc. / http://continuum.io
+# (c) 2012-2013 Continuum Analytics, Inc. / http://continuum.io
 # All Rights Reserved
 #
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
-''' The config module provides the `config` class, which exposes all the
-configuration information about an Anaconda installation that does not require
-the Anaconda package index.
 
-'''
-import logging
+from __future__ import print_function, division, absolute_import
+
 import os
-from os.path import abspath, exists, expanduser, isfile, isdir, join
-import platform
 import sys
+import logging
+from platform import machine
+from os.path import abspath, expanduser, isfile, isdir, join
 
-from conda import __version__
+from conda.compat import PY3
+from conda.install import try_write
 
 
 log = logging.getLogger(__name__)
 
 
-CIO_DEFAULT_CHANNELS = [
-    'http://repo.continuum.io/pkgs/free',
-    'http://repo.continuum.io/pkgs/pro',
-]
+default_python = '3.3' if PY3 else '2.7'
+default_numpy = '1.7'
 
-ROOT_DIR = sys.prefix
-PACKAGES_DIR = join(ROOT_DIR, 'pkgs')
-ENVS_DIR = join(ROOT_DIR, 'envs')
+# ----- operating system and architecture -----
 
-_default_env = os.getenv('CONDA_DEFAULT_ENV')
-if not _default_env:
-    DEFAULT_ENV_PREFIX = ROOT_DIR
-elif os.sep in _default_env:
-    DEFAULT_ENV_PREFIX = abspath(_default_env)
+_sys_map = {'linux2': 'linux', 'linux': 'linux',
+            'darwin': 'osx', 'win32': 'win'}
+platform = _sys_map.get(sys.platform, 'unknown')
+bits = 8 * tuple.__itemsize__
+
+if platform == 'linux' and machine() == 'armv6l':
+    subdir = 'linux-armv6l'
+    arch_name = 'armv6l'
 else:
-    DEFAULT_ENV_PREFIX = join(ENVS_DIR, _default_env)
+    subdir = '%s-%d' % (platform, bits)
+    arch_name = {64: 'x86_64', 32: 'x86'}[bits]
 
-DEFAULT_PYTHON_SPEC = 'python=2.7'
-DEFAULT_NUMPY_SPEC = 'numpy=1.7'
+# ----- rc file -----
 
-def _get_rc_path():
-    for path in [abspath(expanduser('~/.condarc')),
-                 join(sys.prefix, '.condarc')]:
+# This is used by conda config to check which keys are allowed in the config
+# file. Be sure to update it when new keys are added.
+rc_list_keys = [
+    'channels',
+    ]
+rc_bool_keys = [
+    'changeps1',
+    'binstar_upload',
+    ]
+
+user_rc_path = abspath(expanduser('~/.condarc'))
+sys_rc_path = join(sys.prefix, '.condarc')
+def get_rc_path():
+    for path in [user_rc_path, sys_rc_path]:
         if isfile(path):
             return path
     return None
 
-RC_PATH = _get_rc_path()
+rc_path = get_rc_path()
 
-def _load_condarc(path):
+def load_condarc(path):
+    if not path:
+        return {}
     try:
         import yaml
     except ImportError:
-        log.warn("yaml module missing, cannot read .condarc files")
-        return None
-    try:
-        rc = yaml.load(open(path))
-    except IOError:
-        return None
-    log.debug("loaded: %s" % path)
-    if 'channels' in rc:
-        rc['channels'] = [url.rstrip('/') for url in rc['channels']]
+        sys.exit('Error: could not import yaml (required to read .condarc '
+                 'config file)')
+
+    return yaml.load(open(path))
+
+rc = load_condarc(rc_path)
+
+# ----- local directories -----
+
+root_dir = abspath(expanduser(os.getenv('CONDA_ROOT',
+                                        rc.get('root_dir', sys.prefix))))
+
+def pathsep_env(name):
+    x = os.getenv(name)
+    if x:
+        return x.split(os.pathsep)
     else:
-        log.warn("missing 'channels' key in %r"  % path)
-    return rc
+        return []
 
+def default_dirs(tp='pkgs'):
+    lst = [join(root_dir, tp)]
+    if not try_write(lst[0]):
+        lst.insert(0, abspath(join(expanduser('~/conda'), tp)))
+    return lst
 
-class Config(object):
-    ''' The config object collects a variety of configurations about an Anaconda installation.
+pkgs_dirs = [abspath(expanduser(path)) for path in (
+        pathsep_env('CONDA_PACKAGE_CACHE') or
+        rc.get('pkgs_dirs') or
+        default_dirs('pkgs')
+        )]
+envs_dirs = [abspath(expanduser(path)) for path in (
+        pathsep_env('CONDA_ENV_PATH') or
+        rc.get('envs_dirs') or
+        default_dirs('envs')
+        )]
 
-    Attributes
-    ----------
-    channel_base_urls : list of str
-    channel_urls : list of str
-    conda_version : str
-    environment_paths : list of str
-    locations : list of str
-    packages_dir : str
-    platform : str
-    root_dir : str
-    system_location : str
-    user_locations : list of str
+pkgs_dir = pkgs_dirs[0]
+envs_dir = envs_dirs[0]
 
-    '''
+# ----- default environment prefix -----
 
-    __slots__ = ['_rc']
+_default_env = os.getenv('CONDA_DEFAULT_ENV')
+if not _default_env:
+    default_prefix = root_dir
+elif os.sep in _default_env:
+    default_prefix = abspath(_default_env)
+else:
+    for envs_dir in envs_dirs:
+        default_prefix = join(envs_dir, _default_env)
+        if isdir(default_prefix):
+            break
+    else:
+        default_prefix = join(envs_dirs[0], _default_env)
 
-    def __init__(self, first_channel=None):
-        self._rc = None
+# ----- misc -----
 
-        if RC_PATH is None:
-            self._rc = {'channels': CIO_DEFAULT_CHANNELS}
+changeps1 = rc.get('changeps1', True)
+binstar_upload = rc.get('binstar_upload', None) # None means ask
+
+# ----- channels -----
+
+# Note, get_default_urls() and get_rc_urls() return unnormalized urls.
+
+def get_default_urls():
+    return ['http://repo.continuum.io/pkgs/free',
+            'http://repo.continuum.io/pkgs/pro']
+
+def get_rc_urls():
+    if 'system' in rc['channels']:
+        raise RuntimeError("system cannot be used in .condarc")
+    return rc['channels']
+
+def normalize_urls(urls):
+    newurls = []
+    for url in urls:
+        if url == "defaults":
+            newurls.extend(normalize_urls(get_default_urls()))
+        elif url == "system":
+            if not rc_path:
+                newurls.extend(normalize_urls(get_default_urls()))
+            else:
+                newurls.extend(normalize_urls(get_rc_urls()))
         else:
-            self._rc = _load_condarc(RC_PATH)
+            newurls.append('%s/%s/' % (url.rstrip('/'), subdir))
+    return newurls
 
-        if first_channel:
-            self._rc['channels'].insert(0, first_channel)
+def get_channel_urls():
+    if os.getenv('CIO_TEST'):
+        base_urls = ['http://filer/pkgs/pro',
+                     'http://filer/pkgs/free']
+        if os.getenv('CIO_TEST') == '2':
+            base_urls.insert(0, 'http://filer/test-pkgs')
 
-    @property
-    def conda_version(self):
-        ''' Current version of the conda command '''
-        return __version__
+    elif 'channels' not in rc:
+        base_urls = get_default_urls()
 
-    @property
-    def platform(self):
-        '''
-        The current platform of this Anaconda installation
+    else:
+        base_urls = get_rc_urls()
 
-        Platform values are expressed as `system`-`bits`.
+    return normalize_urls(base_urls)
 
-        The possible system values are:
-            - ``win``
-            - ``osx``
-            - ``linux``
-        '''
-        sys_map = {'linux2': 'linux', 'darwin': 'osx', 'win32': 'win'}
-        bits = int(platform.architecture()[0][:2])
-        system = sys_map.get(sys.platform, 'unknown')
-        if system == 'linux' and platform.machine() == 'armv6l':
-            return 'linux-armv6l'
-        return '%s-%d' % (system, bits)
+# ----- proxy -----
 
-    @property
-    def root_dir(self):
-        ''' Root directory for this Anaconda installation '''
-        return ROOT_DIR
+def get_rc_proxy_servers():
+    return rc.get('proxy_servers',None)
 
-    @property
-    def packages_dir(self):
-        ''' Packages directory for this Anaconda installation '''
-        return PACKAGES_DIR
-
-    @property
-    def system_location(self):
-        ''' Default system :ref:`location <location>` for new :ref:`Anaconda environments <environment>` '''
-        return ENVS_DIR
-
-    @property
-    def user_locations(self):
-        ''' Additional user supplied :ref:`locations <location>` for new :ref:`Anaconda environments <environment>` '''
-        locations = []
-        if self._rc:
-            locations.extend(self._rc.get('locations', []))
-        return sorted(abspath(expanduser(location)) for location in locations)
-
-    @property
-    def locations(self):
-        ''' All :ref:`locations <location>`, system and user '''
-        return sorted(self.user_locations + [self.system_location])
-
-    @property
-    def channel_base_urls(self):
-        ''' Base URLS of :ref:`Anaconda channels <channel>` '''
-        if os.getenv('CIO_TEST'):
-            res = ['http://filer/pkgs/pro', 'http://filer/pkgs/free']
-            if os.getenv('CIO_TEST') == "2":
-                res.insert(0, 'http://filer/test-pkgs')
-            return res
-        else:
-            return self._rc['channels']
-
-    @property
-    def channel_urls(self):
-        ''' Platform-specific package URLS of :ref:`Anaconda channels <channel>` '''
-        return [
-            '%s/%s/' % (url, self.platform) for url in self.channel_base_urls
-        ]
-
-    @property
-    def environment_paths(self):
-        ''' All known Anaconda environment paths
-
-        paths to :ref:`Anaconda environments <environment>` are searched for in the directories specified by `config.locations`.
-        Environments located elsewhere are unknown to Anaconda.
-        '''
-        env_paths = []
-        for location in self.locations:
-            if not exists(location):
-                log.warning("location '%s' does not exist" % location)
-                continue
-            for fn in os.listdir(location):
-                prefix = join(location, fn)
-                if isdir(prefix):
-                    env_paths.append(prefix)
-        return sorted(env_paths)
-
-    def __str__(self):
-        return '''
-             platform : %s
-conda command version : %s
-       root directory : %s
-       default prefix : %s
-         channel URLs : %s
-environment locations : %s
-          config file : %s
-'''  % (
-            self.platform,
-            self.conda_version,
-            ROOT_DIR,
-            DEFAULT_ENV_PREFIX,
-            '\n                        '.join(self.channel_urls),
-            '\n                        '.join(self.locations),
-            RC_PATH,
-        )
-
-    def __repr__(self):
-        return 'config()'
+def get_proxy_servers():
+    if 'proxy_servers' not in rc:
+        proxy_servers = None
+    else:
+        proxy_servers = get_rc_proxy_servers()
+    return proxy_servers

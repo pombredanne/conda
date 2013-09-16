@@ -4,111 +4,103 @@
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
+from __future__ import print_function, division, absolute_import
+
 from argparse import RawDescriptionHelpFormatter
-from os import makedirs
-from os.path import abspath, exists
 
-from conda.anaconda import Anaconda
-from conda.planners import create_create_plan
-from utils import (add_parser_prefix, get_prefix, add_parser_yes, confirm,
-                   add_parser_quiet)
+from conda.cli import common
 
+
+descr = ("Create a new conda environment from a list of specified "
+         "packages.  To use the created environment, use 'source activate "
+         "envname' look in that directory first.  This command requires either "
+         "the -n NAME or -p PREFIX option.")
+
+example = """
+examples:
+    conda create -n myenv sqlite
+
+"""
 
 def configure_parser(sub_parsers):
-    descr = ("Create a new conda environment from a list of specified "
-             "packages.  To use the created environment, invoke the binaries "
-             "in that environment's bin directory or adjust your PATH to "
-             "look in that directory first.  This command requires either "
-             "the -n NAME or -p PREFIX option.")
     p = sub_parsers.add_parser(
         'create',
         formatter_class = RawDescriptionHelpFormatter,
-        description     = descr,
-        help            = descr,
-        epilog          = example,
+        description = descr,
+        help = descr,
+        epilog  = example,
     )
-    add_parser_yes(p)
+    common.add_parser_yes(p)
     p.add_argument(
         '-f', "--file",
-        action  = "store",
-        help    = "filename to read package specs from",
+        action = "store",
+        help = "filename to read package specs from",
     )
-    add_parser_prefix(p)
-    add_parser_quiet(p)
+    common.add_parser_channels(p)
+    common.add_parser_prefix(p)
+    common.add_parser_quiet(p)
     p.add_argument(
         'package_specs',
         metavar = 'package_spec',
-        action  = "store",
-        nargs   ='*',
-        help    = "specification of package to install into new Anaconda environment",
+        action = "store",
+        nargs = '*',
+        help = "specification of package to install into new environment",
     )
     p.set_defaults(func=execute)
 
 
 def execute(args, parser):
+    import sys
+    from os.path import exists
+
+    import conda.plan as plan
+    from conda.api import get_index
+
+
     if len(args.package_specs) == 0 and not args.file:
-        raise RuntimeError('too few arguments, must supply command line '
-                           'package specs or --file')
+        sys.exit('Error: too few arguments, must supply command line '
+                 'package specs or --file')
 
-    if (not args.name) and (not args.prefix):
-        raise RuntimeError('either -n NAME or -p PREFIX option required, '
-                           'try "conda create -h" for more details')
-
-    conda = Anaconda()
-
-    prefix = get_prefix(args)
+    common.ensure_name_or_prefix(args, 'create')
+    prefix = common.get_prefix(args, search=False)
 
     if exists(prefix):
-        if args.prefix:
-            raise RuntimeError("'%s' already exists, must supply new directory for -p/--prefix" % prefix)
-        else:
-            raise RuntimeError("'%s' already exists, must supply new directory for -n/--name" % prefix)
+        sys.exit("Error: prefix already exists: %s" % prefix)
 
     if args.file:
-        try:
-            f = open(abspath(args.file))
-            spec_strings = [line for line in f]
-            f.close()
-        except:
-            raise RuntimeError('could not read file: %s', args.file)
+        specs = common.specs_from_file(args.file)
     else:
-        spec_strings = args.package_specs
+        specs = common.specs_from_args(args.package_specs)
 
-    if any(s == 'conda' or s.startswith('conda ') for s in spec_strings):
-        raise RuntimeError("Package 'conda' may only be installed in the "
-                           "root environment")
+    common.check_specs(prefix, specs)
 
-    if len(spec_strings) == 0:
-        raise RuntimeError('no package specifications supplied')
+    channel_urls = args.channel or ()
 
-    plan = create_create_plan(prefix, conda, spec_strings)
+    common.ensure_override_channels_requires_channel(args)
+    index = get_index(channel_urls=channel_urls, prepend=not args.override_channels)
+    actions = plan.install_actions(prefix, index, specs)
 
-    if plan.empty():
-        print 'No matching packages could be found, nothing to do'
+    if plan.nothing_to_do(actions):
+        print('No matching packages could be found, nothing to do')
         return
 
-    print
-    print "Package plan for creating environment at %s:" % prefix
+    print()
+    print("Package plan for creating environment at %s:" % prefix)
+    plan.display_actions(actions, index)
 
-    print plan
-
-
-    confirm(args)
-    makedirs(prefix)
-    env = conda.lookup_environment(prefix)
-
-    plan.execute(env, not args.quiet)
+    common.confirm_yn(args)
+    plan.execute_actions(actions, index, verbose=not args.quiet)
 
     activate_name = prefix
     if args.name:
         activate_name = args.name
-    for cmd in ('activate', 'deactivate'):
-        print "\nTo %s this environment, type 'source %s %s'" % (cmd, cmd, activate_name)
-    print
-
-
-example = '''
-examples:
-    conda create -n myenv sqlite
-
-'''
+    print("#")
+    print("# To activate this environment, use:")
+    if sys.platform == 'win32':
+        print("# > activate %s" % activate_name)
+    else:
+        print("# $ source activate %s" % activate_name)
+        print("#")
+        print("# To deactivate this environment, use:")
+        print("# $ source deactivate")
+    print("#")

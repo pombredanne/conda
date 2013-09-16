@@ -4,11 +4,7 @@
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
-import os
-from os.path import abspath
-
-from conda.builder.index import update_index
-
+from __future__ import print_function, division, absolute_import
 
 descr = "Updates repodata.json in channel directories. (ADVANCED)"
 
@@ -35,6 +31,12 @@ def configure_parser(sub_parsers):
 
 
 def execute(args, parser):
+    import os
+    from os.path import abspath
+
+    from conda.builder.index import update_index
+
+
     if len(args.directories) == 0:
         dir_paths = [os.getcwd()]
     else:

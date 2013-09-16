@@ -4,7 +4,7 @@
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
-from subprocess import *
+from subprocess import Popen, STDOUT, PIPE
 from os.path import join
 import re
 import sys
@@ -12,17 +12,15 @@ import sys
 cmd_names = [
     'info',
     'list',
-    'depends',
     'search',
-    'local',
-    'env',
     'create',
     'install',
     'update',
+    'remove',
     'package',
-    'pip',
     'index',
     'share',
+    'build',
     'clone'
 ]
 
@@ -32,15 +30,29 @@ def scrape_help(cmd_name):
 
     p = Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT, close_fds=True)
 
-    output = p.stdout.read()
+    output = p.stdout.read().decode('utf-8')
 
-    # groups:                ----1---- -----2----
-    usage_pat = re.compile(r'(usage): (conda .*)\n')
+
+    if cmd_name in ['remove','package','install']:
+
+        # groups:
+        usage_pat = re.compile(r'(usage): (conda .*\n\s*.*\n\s*.*)')
+
+        # groups:                           -----1----
+        desc_pat = re.compile(r'usage.*\n\s*(.*\n\s*.*)')
+    else:
+        # groups:                ----1---- -----2----
+        usage_pat = re.compile(r'(usage): (conda .*)\n')
+
+        # groups:                          --1-
+        desc_pat = re.compile(r'usage.*\n\n(.*)\n\n')
+
+
     usage = usage_pat.search(output)
-
-    # groups:                          --1-
-    desc_pat = re.compile(r'usage.*\n\n(.*)\n\n')
     desc = desc_pat.search(output)
+
+
+
 
     # groups:                                               --1--   --2-
     positional_pat = re.compile(r'positional arguments:\n\s+(\w*)\s+(.*)\n')
@@ -87,7 +99,7 @@ if __name__ == '__main__':
             path = sys.argv[1]
         outpath = join(path, "%s.txt" % name)
 
-        print "Scraping help for '%s' -> %s" % (name, outpath)
+        print("Scraping help for '%s' -> %s" % (name, outpath))
 
         outfile = open(outpath, "w")
         outfile.write(output)

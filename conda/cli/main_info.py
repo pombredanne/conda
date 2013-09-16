@@ -4,27 +4,25 @@
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
-import os
-import sys
-import json
-import conda
-from conda.config import Config, ROOT_DIR, DEFAULT_ENV_PREFIX, RC_PATH
+from __future__ import print_function, division, absolute_import
 
-from utils import add_parser_json
+from conda.cli import common
+
+
+help = "Display information about current conda install."
 
 
 def configure_parser(sub_parsers):
-    p = sub_parsers.add_parser(
-        'info',
-        description     = "Display information about current conda install.",
-        help            = "Display information about current conda install.",
-    )
-    add_parser_json(p)
+    p = sub_parsers.add_parser('info',
+                               description = help,
+                               help = help)
+    common.add_parser_json(p)
     els_group = p.add_mutually_exclusive_group()
     els_group.add_argument(
         '-a', "--all",
         action  = "store_true",
-        help    = "show location, license, and system information.")
+        help    = "show all information, (environments, license, and system "
+                  "information.")
     els_group.add_argument(
         '-e', "--envs",
         action  = "store_true",
@@ -36,11 +34,6 @@ def configure_parser(sub_parsers):
         help    = "display information about local conda licenses list",
     )
     els_group.add_argument(
-        "--locations",
-        action  = "store_true",
-        help    = "list known locations for conda environments.",
-    )
-    els_group.add_argument(
         '-s', "--system",
         action = "store_true",
         help = "list PATH and PYTHONPATH environments for debugging purposes",
@@ -49,21 +42,27 @@ def configure_parser(sub_parsers):
 
 
 def execute(args, parser):
+    import os
+    import sys
+    from os.path import basename, dirname, join
 
-    options = ['envs', 'locations', 'system', 'license']
+    import conda
+    import conda.config as config
 
-    conf = Config()
 
+    options = 'envs', 'system', 'license'
+
+    info_dict = dict(platform=config.subdir,
+                     conda_version=conda.__version__,
+                     conda_location=dirname(conda.__file__),
+                     root_prefix=config.root_dir,
+                     pkgs_dirs=config.pkgs_dirs,
+                     envs_dirs=config.envs_dirs,
+                     default_prefix=config.default_prefix,
+                     channels=config.get_channel_urls(),
+                     rc_path=config.rc_path)
     if args.json:
-        d = dict(
-            platform=conf.platform,
-            conda_version=conda.__version__,
-            root_prefix=ROOT_DIR,
-            default_prefix=DEFAULT_ENV_PREFIX,
-            channels=conf.channel_urls,
-            rc_path=RC_PATH,
-        )
-        json.dump(d, sys.stdout, indent=2, sort_keys=True)
+        common.stdout_json(info_dict)
         return
 
     if args.all:
@@ -71,46 +70,50 @@ def execute(args, parser):
             setattr(args, option, True)
 
     if args.all or all(not getattr(args, opt) for opt in options):
-        print
-        print "Current conda install:"
-        print conf
+        for key in 'pkgs_dirs', 'envs_dirs', 'channels':
+            info_dict['_' + key] = ('\n' + 24 * ' ').join(
+                  ('%s (%d)' % (n, i) for i, n in enumerate(info_dict[key])))
+        print("""
+Current conda install:
 
-    if args.locations:
-        if len(conf.locations) == 0:
-            print "No conda locations configured"
-        else:
-            print
-            print "Locations for conda environments:"
-            print
-            for location in conf.locations:
-                print "    %s" % location,
-                if location == conf.system_location:
-                    print " (system location)",
-                print
-            print
+             platform : %(platform)s
+        conda version : %(conda_version)s
+       conda location : %(conda_location)s
+     root environment : %(root_prefix)s
+  default environment : %(default_prefix)s
+        package cache : %(_pkgs_dirs)s
+                 envs : %(_envs_dirs)s
+         channel URLs : %(_channels)s
+          config file : %(rc_path)s
+""" % info_dict)
 
     if args.envs:
-        env_paths = conf.environment_paths
+        print("# conda environments:")
+        print("#")
+        def disp_env(prefix):
+            fmt = '%-20s  %s  %s'
+            default = '*' if prefix == config.default_prefix else ' '
+            name = ('(root)' if prefix == config.root_dir else
+                    basename(prefix))
+            print(fmt % (name, default, prefix))
 
-        if len(env_paths) == 0:
-            print "Known conda environments: None"
-        else:
-            print "Known conda environments:"
-            print
-            for path in env_paths:
-                print "    %s" % path
-            print
+        disp_env(config.root_dir)
+        for envs_dir in config.envs_dirs:
+            for dn in sorted(os.listdir(envs_dir)):
+                if os.path.isdir(join(envs_dir, dn)):
+                    disp_env(join(envs_dir, dn))
+        print()
 
     if args.system:
-        print
-        print "PATH: %s" % os.getenv('PATH')
-        print "PYTHONPATH: %s" % os.getenv('PYTHONPATH')
-        if sys.platform == 'linux':
-            print "LD_LIBRARY_PATH: %s" % os.getenv('LD_LIBRARY_PATH')
+        print()
+        print("PATH: %s" % os.getenv('PATH'))
+        print("PYTHONPATH: %s" % os.getenv('PYTHONPATH'))
+        if config.platform == 'linux':
+            print("LD_LIBRARY_PATH: %s" % os.getenv('LD_LIBRARY_PATH'))
         elif sys.platform == 'darwin':
-            print "DYLD_LIBRARY_PATH: %s" % os.getenv('DYLD_LIBRARY_PATH')
-        print "CONDA_DEFAULT_ENV: %s" % os.getenv('CONDA_DEFAULT_ENV')
-        print
+            print("DYLD_LIBRARY_PATH: %s" % os.getenv('DYLD_LIBRARY_PATH'))
+        print("CONDA_DEFAULT_ENV: %s" % os.getenv('CONDA_DEFAULT_ENV'))
+        print()
 
     if args.license:
         try:

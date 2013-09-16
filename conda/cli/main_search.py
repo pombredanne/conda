@@ -1,42 +1,40 @@
-# (c) 2012 Continuum Analytics, Inc. / http://continuum.io
+# (c) 2012-2013 Continuum Analytics, Inc. / http://continuum.io
 # All Rights Reserved
 #
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
-import re
+from __future__ import print_function, division, absolute_import
+
+from conda.cli import common
 from argparse import RawDescriptionHelpFormatter
 
-from conda.anaconda import Anaconda
-from conda.constraints import Satisfies
-from conda.package import sort_packages_by_name
-from conda.package_spec import make_package_spec
-from utils import add_parser_prefix, get_prefix
 
+descr = "Search for packages and display their information."
+example = '''
+examples:
+    conda search -p ~/anaconda/envs/myenv/ scipy
+
+'''
 
 def configure_parser(sub_parsers):
     p = sub_parsers.add_parser(
         'search',
         formatter_class = RawDescriptionHelpFormatter,
-        description = "Search for packages and display their information.",
-        help        = "Search for packages and display their information.",
-        epilog      = example,
+        description = descr,
+        help = descr,
+        epilog = example,
     )
-    add_parser_prefix(p)
-    p.add_argument(
-        "--all",
-        action  = "store_true",
-        help    = "show all results compatible with any environment",
-    )
+    common.add_parser_prefix(p)
     p.add_argument(
         '-c', "--canonical",
         action  = "store_true",
         help    = "output canonical names of packages only",
     )
     p.add_argument(
-        '-s', "--show-requires",
+        '-o', "--outdated",
         action  = "store_true",
-        help    = "also display package requirements",
+        help    = "only display installed but outdated packages",
     )
     p.add_argument(
         '-v', "--verbose",
@@ -44,91 +42,66 @@ def configure_parser(sub_parsers):
         help    = "Show available packages as blocks of data",
     )
     p.add_argument(
-        'search_expression',
+        'regex',
         action  = "store",
         nargs   = "?",
         help    = "package specification or regular expression to search for "
                   "(default: display all packages)",
     )
+    common.add_parser_channels(p, dashc=False)
     p.set_defaults(func=execute)
 
 
 def execute(args, parser):
-    conda = Anaconda()
+    import re
 
-    if args.search_expression is None:
-        pkgs = sort_packages_by_name(conda.index.pkgs)
+    import conda.install as install
+    from conda.api import get_index
+    from conda.resolve import MatchSpec, Resolve
 
-    elif args.search_expression in conda.index.package_names:
-        pkgs = conda.index.lookup_from_name(args.search_expression)
 
+    if args.regex:
+        pat = re.compile(args.regex, re.I)
     else:
-        spec = make_package_spec(args.search_expression)
-        if spec.version:
-           pkgs = conda.index.find_matches(
-                Satisfies(spec),
-                conda.index.lookup_from_name(spec.name)
-            )
-        else:
-            try:
-                pkg_names = set()
-                pat = re.compile(args.search_expression)
-            except:
-                raise RuntimeError("Could not understand search "
-                                   "expression '%s'" % args.search_expression)
-            pkg_names = set()
-            for name in conda.index.package_names:
-                if pat.search(name):
-                    pkg_names.add(name)
-            pkgs = set()
-            for name in pkg_names:
-                pkgs |= conda.index.lookup_from_name(name)
+        pat = None
 
-    if args.all:
-        compat_string = ''
-    else:
-        prefix = get_prefix(args)
-        env = conda.lookup_environment(prefix)
-        pkgs = conda.index.find_matches(env.requirements, pkgs)
-        compat_string = ' compatible with environment %s' % prefix
+    prefix = common.get_prefix(args)
+    if not args.canonical:
+        linked = install.linked(prefix)
 
-    if args.canonical:
-        for pkg in pkgs:
-            print pkg.canonical_name
-        return
+    common.ensure_override_channels_requires_channel(args, dashc=False)
+    channel_urls = args.channel or ()
+    index = get_index(channel_urls=channel_urls, prepend=not
+        args.override_channels)
 
-    if len(pkgs) == 0:
-        print "No matches found for '%s'%s" % (args.search_expression,
-                                               compat_string)
-        return
+    r = Resolve(index)
+    for name in sorted(r.groups):
+        disp_name = name
+        if pat and pat.search(name) is None:
+            continue
 
-    if len(pkgs) == 1:
-        print "One match found%s:" % compat_string
-    else:
-        print "%d matches found%s:" % (len(pkgs), compat_string)
+        if args.outdated:
+            vers_inst = [dist.rsplit('-', 2)[1] for dist in linked
+                         if dist.rsplit('-', 2)[0] == name]
+            if not vers_inst:
+                continue
+            assert len(vers_inst) == 1, name
+            pkgs = sorted(r.get_pkgs(MatchSpec(name)))
+            if not pkgs:
+                continue
+            latest = pkgs[-1]
+            if latest.version == vers_inst[0]:
+                continue
 
-    print
-    print 'Packages with available versions and build strings:'
-
-
-    if args.verbose:
-        for pkg in pkgs:
-            print
-            pkg.print_info(args.show_requires)
-
-    else:
-        print
-        current_name = ''
-        for pkg in sorted(pkgs):
-            if pkg.name != current_name:
-                current_name = pkg.name
-                print "%-25s %-15s %15s" % (current_name, pkg.version, pkg.build)
-            else:
-                print "%-25s %-15s %15s" % (" ", pkg.version, pkg.build)
-
-
-example = '''
-examples:
-    conda search -p ~/anaconda/envs/myenv/ scipy
-
-'''
+        for pkg in sorted(r.get_pkgs(MatchSpec(name))):
+            dist = pkg.fn[:-8]
+            if args.canonical:
+                print(dist)
+                continue
+            inst = '*' if dist in linked else ' '
+            print('%-25s %s  %-15s %15s  %s' % (
+                    disp_name, inst,
+                    pkg.version,
+                    r.index[pkg.fn]['build'],
+                    common.disp_features(r.features(pkg.fn))) )
+            disp_name = ''

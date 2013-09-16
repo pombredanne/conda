@@ -1,8 +1,10 @@
-# (c) 2012 Continuum Analytics, Inc. / http://continuum.io
+# (c) 2012-2013 Continuum Analytics, Inc. / http://continuum.io
 # All Rights Reserved
 #
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
+
+from __future__ import print_function, division, absolute_import
 
 import argparse
 
@@ -28,9 +30,12 @@ class ArgumentParser(argparse.ArgumentParser):
         import sys
         exc = sys.exc_info()[1]
         if exc:
-            # this is incredibly lame, but argparse stupidly does not expose reasonable hooks
-            # for customizing error handling
-            argument = self._get_action_from_name(exc.argument_name)
+            # this is incredibly lame, but argparse stupidly does not expose
+            # reasonable hooks for customizing error handling
+            if hasattr(exc, 'argument_name'):
+                argument = self._get_action_from_name(exc.argument_name)
+            else:
+                argument = None
             if argument and argument.dest == "cmd":
                 import re
                 m = re.compile(r"invalid choice: '(\w+)'").match(exc.message)
