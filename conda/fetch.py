@@ -10,14 +10,16 @@ import os
 import bz2
 import sys
 import json
+import shutil
 import hashlib
+import tempfile
 from logging import getLogger
-from os.path import join
+from os.path import basename, isfile, join
 
 from conda import config
 from conda.utils import memoized
 from conda.connection import connectionhandled_urlopen
-from conda.compat import PY3, itervalues
+from conda.compat import PY3, itervalues, get_http_value
 from conda.lock import Locked
 
 if PY3:
@@ -33,7 +35,7 @@ retries = 3
 
 
 def create_cache_dir():
-    cache_dir = join(config.pkgs_dir, 'cache')
+    cache_dir = join(config.pkgs_dirs[0], 'cache')
     try:
         os.makedirs(cache_dir)
     except OSError:
@@ -46,7 +48,7 @@ def cache_fn_url(url):
 
 
 def add_http_value_to_dict(u, http_key, d, dict_key):
-    value = u.headers.get(http_key) if PY3 else u.info().getheader(http_key)
+    value = get_http_value(u, http_key)
     if value:
         d[dict_key] = value
 
@@ -57,7 +59,7 @@ def fetch_repodata(url):
     cache_path = join(create_cache_dir(), cache_fn_url(url))
     try:
         cache = json.load(open(cache_path))
-    except IOError:
+    except (IOError, ValueError):
         cache = {'packages': {}}
 
     request = urllib2.Request(url + 'repodata.json.bz2')
@@ -75,7 +77,7 @@ def fetch_repodata(url):
         add_http_value_to_dict(u, 'Last-Modified', cache, '_mod')
 
     except urllib2.HTTPError as e:
-        msg = "HTTPError: %d  %s\n" % (e.code, e.msg)
+        msg = "HTTPError: %d  %s  %s\n" % (e.code, e.msg, url)
         log.debug(msg)
         if e.code != 304:
             raise RuntimeError(msg)
@@ -97,6 +99,7 @@ def fetch_repodata(url):
 
 @memoized
 def fetch_index(channel_urls):
+    log.debug('channel_urls=' + repr(channel_urls))
     index = {}
     for url in reversed(channel_urls):
         repodata = fetch_repodata(url)
@@ -110,12 +113,16 @@ def fetch_index(channel_urls):
     return index
 
 
-def fetch_pkg(info, dst_dir=config.pkgs_dir):
+def fetch_pkg(info, dst_dir=None):
     '''
     fetch a package `fn` from `url` and store it into `dst_dir`
     '''
+    if dst_dir is None:
+        dst_dir = config.pkgs_dirs[0]
+
     fn = '%(name)s-%(version)s-%(build)s.tar.bz2' % info
     url = info['channel'] + fn
+    log.debug("url=%r" % url)
     path = join(dst_dir, fn)
     pp = path + '.part'
 
@@ -124,12 +131,11 @@ def fetch_pkg(info, dst_dir=config.pkgs_dir):
             try:
                 fi = connectionhandled_urlopen(url)
             except IOError:
-                log.debug("Attempt %d failed at urlopen" % x)
+                log.debug("attempt %d failed at urlopen" % x)
                 continue
             if fi is None:
-                log.debug("Could not fetch (urlopen returned None)")
+                log.debug("could not fetch (urlopen returned None)")
                 continue
-            log.debug("Fetching: %s" % url)
             n = 0
             h = hashlib.new('md5')
             getLogger('fetch.start').info((fn, info['size']))
@@ -138,7 +144,7 @@ def fetch_pkg(info, dst_dir=config.pkgs_dir):
                 fo = open(pp, 'wb')
             except IOError:
                 raise RuntimeError("Could not open %r for writing.  "
-                             "Permissions problem or missing directory?" % pp)
+                          "Permissions problem or missing directory?" % pp)
             while True:
                 try:
                     chunk = fi.read(16384)
@@ -170,3 +176,61 @@ def fetch_pkg(info, dst_dir=config.pkgs_dir):
             return
 
     raise RuntimeError("Could not locate '%s'" % url)
+
+
+def download(url, dst_path):
+    try:
+        u = connectionhandled_urlopen(url)
+    except IOError:
+        raise RuntimeError("Could not open '%s'" % url)
+    except ValueError as e:
+        raise RuntimeError(e)
+
+    size = get_http_value(u, 'Content-Length')
+    if size:
+        size = int(size)
+        fn = basename(dst_path)
+        getLogger('fetch.start').info((fn[:14], size))
+
+    n = 0
+    fo = open(dst_path, 'wb')
+    while True:
+        chunk = u.read(16384)
+        if not chunk:
+            break
+        fo.write(chunk)
+        n += len(chunk)
+        if size:
+            getLogger('fetch.update').info(n)
+    fo.close()
+
+    u.close()
+    if size:
+        getLogger('fetch.stop').info(None)
+
+
+class TmpDownload(object):
+    """
+    Context manager to handle downloads to a tempfile
+    """
+    def __init__(self, url, verbose=True):
+        self.url = url
+        self.verbose = verbose
+
+    def __enter__(self):
+        if isfile(self.url):
+            # if we provide the file itself, no tmp dir is created
+            self.tmp_dir = None
+            return self.url
+        else:
+            if self.verbose:
+                from conda.console import setup_handlers
+                setup_handlers()
+            self.tmp_dir = tempfile.mkdtemp()
+            dst = join(self.tmp_dir, basename(self.url))
+            download(self.url, dst)
+            return dst
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.tmp_dir:
+            shutil.rmtree(self.tmp_dir)

@@ -44,7 +44,7 @@ import argparse
 
 from conda.cli import conda_argparse
 from conda.cli import main_build
-from conda.cli import main_clone
+from conda.cli import main_bundle
 from conda.cli import main_create
 from conda.cli import main_help
 from conda.cli import main_index
@@ -62,18 +62,19 @@ from conda.cli import main_clean
 
 def main():
     if len(sys.argv) > 1:
-        if sys.argv[1] in ('..activate', '..deactivate', '..checkenv'):
+        argv1 = sys.argv[1]
+        if argv1 in ('..activate', '..deactivate', '..checkenv'):
             import conda.cli.activate as activate
             activate.main()
             return
-        if sys.argv[1] in ('..changeps1'):
+        if argv1 in ('..changeps1'):
             import conda.cli.misc as misc
             misc.main()
             return
-        if sys.argv[1] == 'pip':
+        if argv1 == 'pip':
             sys.exit("""ERROR:
-The "conda pip" command has been removed from conda version 1.8 for the
-following reasons:
+The "conda pip" command has been removed from conda (as of version 1.8) for
+the following reasons:
   * users get the wrong impression that you *must* use conda pip (instead
     of simply pip) when using Anaconda
   * there should only be one preferred way to build packages, and that is
@@ -91,6 +92,32 @@ In short:
   * use "pip" if you want to install something that is on PyPI for which there
     isn't a conda package.
 """)
+        if argv1 in ('activate', 'deactivate'):
+            sys.stderr.write("Error: '%s' is not a conda command.\n" % argv1)
+            if sys.platform != 'win32':
+                sys.stderr.write('Did you mean "source %s" ?\n' %
+                                 ' '.join(sys.argv[1:]))
+            sys.exit(1)
+
+        # for backwards compatibility of conda-api
+        if sys.argv[1:4] == ['share', '--json', '--prefix']:
+            import json
+            from os.path import abspath
+            from conda.builder.share import old_create_bundle
+            prefix = sys.argv[4]
+            path, warnings = old_create_bundle(abspath(prefix))
+            json.dump(dict(path=path, warnings=warnings),
+                      sys.stdout, indent=2, sort_keys=True)
+            return
+        if sys.argv[1:4] == ['clone', '--json', '--prefix']:
+            import json
+            from os.path import abspath
+            from conda.builder.share import old_clone_bundle
+            prefix, path = sys.argv[4:6]
+            old_clone_bundle(path, abspath(prefix))
+            json.dump(dict(warnings=[]), sys.stdout, indent=2)
+            return
+
     if len(sys.argv) == 1:
         sys.argv.append('-h')
 
@@ -128,7 +155,7 @@ In short:
     main_build.configure_parser(sub_parsers)
     main_skeleton.configure_parser(sub_parsers)
     main_package.configure_parser(sub_parsers)
-    main_clone.configure_parser(sub_parsers)
+    main_bundle.configure_parser(sub_parsers)
     main_index.configure_parser(sub_parsers)
 
     try:

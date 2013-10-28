@@ -12,22 +12,8 @@ from os.path import abspath, basename, dirname, isdir, isfile, islink, join
 
 import conda.config as config
 import conda.install as install
-from conda.misc import install_local_packages
+from conda.misc import untracked
 
-
-
-def conda_installed_files(prefix, exclude_self_build=False):
-    """
-    Return the set of files which have been installed (using conda) into
-    a given prefix.
-    """
-    res = set()
-    for dist in install.linked(prefix):
-        meta = install.is_linked(prefix, dist)
-        if exclude_self_build and 'file_hash' in meta:
-            continue
-        res.update(set(meta['files']))
-    return res
 
 
 def get_installed_version(prefix, name):
@@ -36,47 +22,6 @@ def get_installed_version(prefix, name):
         if n == name:
             return v
     return None
-
-
-def rel_path(prefix, path):
-    res = path[len(prefix) + 1:]
-    if sys.platform == 'win32':
-        res = res.replace('\\', '/')
-    return res
-
-
-def walk_prefix(prefix):
-    """
-    Return the set of all files in a given prefix directory.
-    """
-    res = set()
-    prefix = abspath(prefix)
-    ignore = {'pkgs', 'envs', 'conda-bld', 'conda-meta', '.conda_lock',
-              'users', 'LICENSE.txt', 'info', '.index', '.unionfs'}
-    for fn in os.listdir(prefix):
-        if fn in ignore:
-            continue
-        if isfile(join(prefix, fn)):
-            res.add(fn)
-            continue
-        for root, dirs, files in os.walk(join(prefix, fn)):
-            for fn in files:
-                res.add(rel_path(prefix, join(root, fn)))
-            for dn in dirs:
-                path = join(root, dn)
-                if islink(path):
-                    res.add(rel_path(prefix, path))
-    return res
-
-
-def untracked(prefix, exclude_self_build=False):
-    """
-    Return (the set) of all untracked files for a given prefix.
-    """
-    conda_files = conda_installed_files(prefix, exclude_self_build)
-    return {path for path in walk_prefix(prefix) - conda_files
-            if not (path.endswith('~') or (path.endswith('.pyc') and
-                                           path[:-1] in conda_files))}
 
 
 def remove(prefix, files):
@@ -214,29 +159,6 @@ def make_tarbz2(prefix, name='unknown', version='0.0', build_number=0,
     print('# success')
     print(tarbz2_fn)
     return tarbz2_fn
-
-
-def guess_pkg_version(files, pkg_name):
-    """
-    Guess the package version from (usually untracked) files.
-    """
-    pat = re.compile(r'site-packages[/\\]' + pkg_name + r'-([^\-]+)-', re.I)
-    for f in files:
-        m = pat.search(f)
-        if m:
-            return m.group(1)
-    return '0.0'
-
-
-def packup_and_reinstall(prefix, ignore_files, pkg_name, pkg_version=None):
-    files = untracked(prefix) - ignore_files
-    if pkg_version is None:
-        pkg_version = guess_pkg_version(files, pkg_name)
-    fn = make_tarbz2(prefix, name=pkg_name, version=pkg_version, files=files)
-    if fn is None:
-        return
-    remove(prefix, files)
-    install_local_packages(prefix, [fn])
 
 
 def which_prefix(path):

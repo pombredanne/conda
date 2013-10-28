@@ -11,7 +11,8 @@ These API functions have argument names referring to:
 
     dist:        canonical package name (e.g. 'numpy-1.6.2-py26_0')
 
-    pkgs_dir:    the "packages directory" (e.g. '/opt/anaconda/pkgs')
+    pkgs_dir:    the "packages directory" (e.g. '/opt/anaconda/pkgs' or
+                 '/home/joe/envs/.pkgs')
 
     prefix:      the prefix of a particular environment, which may also
                  be the "default" environment (i.e. sys.prefix),
@@ -106,8 +107,8 @@ LINK_HARD = 1
 LINK_SOFT = 2
 LINK_COPY = 3
 link_name_map = {
-    LINK_HARD: 'hard',
-    LINK_SOFT: 'soft',
+    LINK_HARD: 'hard-link',
+    LINK_SOFT: 'soft-link',
     LINK_COPY: 'copy',
 }
 
@@ -176,14 +177,21 @@ def update_prefix(path, new_prefix):
     os.chmod(path, stat.S_IMODE(st.st_mode))
 
 
+def name_dist(dist):
+    return dist.rsplit('-', 2)[0]
+
+
 def create_meta(prefix, dist, info_dir, extra_info):
     """
     Create the conda metadata, in a given prefix, for a given package.
     """
-    meta_dir = join(prefix, 'conda-meta')
+    # read info/index.json first
     with open(join(info_dir, 'index.json')) as fi:
         meta = json.load(fi)
+    # add extra info
     meta.update(extra_info)
+    # write into <env>/conda-meta/<dist>.json
+    meta_dir = join(prefix, 'conda-meta')
     if not isdir(meta_dir):
         os.makedirs(meta_dir)
     with open(join(meta_dir, dist + '.json'), 'w') as fo:
@@ -212,9 +220,8 @@ def mk_menus(prefix, files, remove=False):
 
 
 def post_link(prefix, dist, unlink=False):
-    name = dist.rsplit('-', 2)[0]
     path = join(prefix, 'Scripts' if on_win else 'bin', '.%s-%s.%s' % (
-            name,
+            name_dist(dist),
             'pre-unlink' if unlink else 'post-link',
             'bat' if on_win else 'sh'))
     if not isfile(path):
@@ -231,7 +238,7 @@ def post_link(prefix, dist, unlink=False):
 # ========================== begin API functions =========================
 
 def try_write(dir_path):
-    path = join(dir_path, '.tmp-conda')
+    path = join(dir_path, '.conda-try-write')
     assert isdir(dir_path)
     assert not isfile(path)
     try:
@@ -333,8 +340,10 @@ def link(pkgs_dir, prefix, dist, linktype=LINK_HARD):
     Set up a packages in a specified (environment) prefix.  We assume that
     the packages has been extracted (using extract() above).
     '''
+    log.debug('pkgs_dir=%r, prefix=%r, dist=%r, linktype=%r' %
+              (pkgs_dir, prefix, dist, linktype))
     if (on_win and abspath(prefix) == abspath(sys.prefix) and
-              dist.rsplit('-', 2)[0] in win_ignore_root):
+              name_dist(dist) in win_ignore_root):
         # on Windows we have the file lock problem, so don't allow
         # linking or unlinking some packages
         print('Ignored: %s' % dist)
@@ -352,11 +361,10 @@ def link(pkgs_dir, prefix, dist, linktype=LINK_HARD):
     with Locked(prefix), Locked(pkgs_dir):
         for f in files:
             src = join(source_dir, f)
-            fdn, fbn = os.path.split(f)
-            dst_dir = join(prefix, fdn)
+            dst = join(prefix, f)
+            dst_dir = dirname(dst)
             if not isdir(dst_dir):
                 os.makedirs(dst_dir)
-            dst = join(dst_dir, fbn)
             if os.path.exists(dst):
                 log.warn("file already exists: %r" % dst)
                 try:
@@ -367,12 +375,11 @@ def link(pkgs_dir, prefix, dist, linktype=LINK_HARD):
                   f.startswith('bin/python') else linktype)
             try:
                 _link(src, dst, lt)
-                log.debug('_link (src=%r, dst=%r, type=%r)' % (src, dst, lt))
             except OSError:
                 log.error('failed to link (src=%r, dst=%r, type=%r)' %
                           (src, dst, lt))
 
-        if dist.rsplit('-', 2)[0]  == '_cache':
+        if name_dist(dist) == '_cache':
             return
 
         for f in sorted(has_prefix_files):
@@ -393,7 +400,7 @@ def unlink(prefix, dist):
     package does not exist in the prefix.
     '''
     if (on_win and abspath(prefix) == abspath(sys.prefix) and
-              dist.rsplit('-', 2)[0] in win_ignore_root):
+              name_dist(dist) in win_ignore_root):
         # on Windows we have the file lock problem, so don't allow
         # linking or unlinking some packages
         print('Ignored: %s' % dist)

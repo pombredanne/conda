@@ -1,4 +1,4 @@
-Updates repodata.json in channel directories. (ADVANCED)
+Creates (or updates) repodata.json in channel directories. (ADVANCED)
 
 **usage**: ``conda index [-h] [-f] [-q] [DIRECTORIES [DIRECTORIES ...]]``
 
@@ -8,4 +8,4 @@ Updates repodata.json in channel directories. (ADVANCED)
 optional arguments:
   -h, --help   show this help message and exit
   -f, --force  force reading all files
-  -q, --quiet  suppress console output
+  -q, --quiet

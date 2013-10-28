@@ -6,12 +6,13 @@
 
 from __future__ import print_function, division, absolute_import
 
-help = """\
-Build skeleton recipes for packages from popular package hosting sites.
-"""
+
+descr = ("Build skeleton recipes for packages from popular package hosting "
+         "sites. (ADVANCED)")
+
 
 def configure_parser(sub_parsers):
-    p = sub_parsers.add_parser('skeleton', description=help, help=help)
+    p = sub_parsers.add_parser('skeleton', description=descr, help=descr)
 
     repos = p.add_subparsers(
         dest="repo"
@@ -62,6 +63,14 @@ def configure_parser(sub_parsers):
         finding the right dependencies and entry points if the package uses
         distribute.  WARNING: The default option downloads and runs the
         package's setup.py script."""
+        )
+    pypi.add_argument(
+        "--no-prompt",
+        action="store_true",
+        default=False,
+        dest="noprompt",
+        help="""Don't prompt the user on ambiguous choices.  Instead, make the
+        best possible choice and continue."""
         )
     p.set_defaults(func=execute)
 

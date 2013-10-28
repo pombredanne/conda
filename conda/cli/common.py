@@ -3,7 +3,7 @@ from __future__ import print_function, division, absolute_import
 import os
 import sys
 import argparse
-from os.path import abspath, expanduser, isdir, join
+from os.path import abspath, basename, expanduser, isdir, join
 
 import conda.config as config
 
@@ -21,6 +21,7 @@ def add_parser_prefix(p):
         action = "store",
         help = "full path to environment prefix (default: %s)" %
                                            config.default_prefix,
+        metavar = 'PATH',
     )
 
 
@@ -90,7 +91,7 @@ def confirm(args, message="Proceed", choices=('yes', 'no'), default='yes'):
             options.append(option[0])
     message = "%s (%s)? " % (message, '/'.join(options))
     choices = {alt:choice for choice in choices for alt in [choice,
-        choice[0]]}
+                                                            choice[0]]}
     choices[''] = default
     while True:
         # raw_input has a bug and prints to stderr, not desirable
@@ -109,7 +110,8 @@ def confirm_yn(args, message="Proceed", default='yes', exit_no=True):
     if args.yes:
         return True
     try:
-        choice = confirm(args, message=message, choices=('yes', 'no'), default=default)
+        choice = confirm(args, message=message, choices=('yes', 'no'),
+                         default=default)
     except KeyboardInterrupt:
         # no need to exit by showing the traceback
         sys.exit("\nOperation aborted.  Exiting.")
@@ -126,21 +128,49 @@ def ensure_name_or_prefix(args, command):
         sys.exit('Error: either -n NAME or -p PREFIX option required,\n'
                  '       try "conda %s -h" for more details' % command)
 
+def find_prefix_name(name):
+    if name == config.root_env_name:
+        return config.root_dir
+    for envs_dir in config.envs_dirs:
+        prefix = join(envs_dir, name)
+        if isdir(prefix):
+            return prefix
+    return None
 
 def get_prefix(args, search=True):
     if args.name:
+        if args.name == config.root_env_name:
+            return config.root_dir
         if search:
-            for envs_dir in config.envs_dirs:
-                prefix = join(envs_dir, args.name)
-                if isdir(prefix):
-                    return prefix
-        return join(config.envs_dir, args.name)
+            prefix = find_prefix_name(args.name)
+            if prefix:
+                return prefix
+        return join(config.envs_dirs[0], args.name)
 
     if args.prefix:
         return abspath(expanduser(args.prefix))
 
     return config.default_prefix
 
+def inroot_notwritable(prefix):
+    """
+    return True if the prefix is under root and root is not writeable
+    """
+    return (abspath(prefix).startswith(config.root_dir) and
+            not config.root_writable)
+
+def name_prefix(prefix):
+    if abspath(prefix) == config.root_dir:
+        return config.root_env_name
+    return basename(prefix)
+
+def check_write(command, prefix):
+    if inroot_notwritable(prefix):
+        from conda.cli.help import root_read_only
+
+        root_read_only(command, prefix)
+
+# -------------------------------------------------------------------------
 
 def arg2spec(arg):
     parts = arg.split('=')
@@ -149,6 +179,8 @@ def arg2spec(arg):
         if c in name:
             sys.exit("Error: Invalid character '%s' in package "
                      "name: '%s'" % (c, name))
+    if name in config.disallow:
+        sys.exit("Error: specification '%s' is disallowed" % name)
     if len(parts) == 1:
         return name
     if len(parts) == 2:
@@ -166,16 +198,19 @@ def specs_from_args(args):
     return [arg2spec(arg) for arg in args]
 
 
-def specs_from_file(path):
-    try:
+def specs_from_url(url):
+    from conda.fetch import TmpDownload
+
+    with TmpDownload(url, verbose=False) as path:
         specs = []
-        for line in open(path):
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            specs.append(arg2spec(line))
-    except IOError:
-        sys.exit('Error: cannot open file: %s' % path)
+        try:
+            for line in open(path):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                specs.append(arg2spec(line))
+        except IOError:
+            sys.exit('Error: cannot open file: %s' % path)
     return specs
 
 

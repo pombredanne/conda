@@ -2,18 +2,12 @@ from __future__ import print_function, division, absolute_import
 
 import os
 import sys
-import hashlib
 import shutil
 import tarfile
 import zipfile
 import subprocess
 from os.path import (dirname, getmtime, getsize, isdir, isfile,
                      islink, join, normpath)
-
-if sys.version_info[0] < 3:
-    import urllib2
-else:
-    import urllib.request as urllib2
 
 from conda.utils import md5_file
 
@@ -32,19 +26,6 @@ def _check_call(args, **kwargs):
         subprocess.check_call(args, **kwargs)
     except subprocess.CalledProcessError:
         sys.exit('Command failed: %s' % ' '.join(args))
-
-
-def download(url, dst_path, md5=None):
-    try:
-        fi = urllib2.urlopen(url)
-    except urllib2.URLError:
-        raise urllib2.URLError("Error could not open URL: %r" % url)
-    data = fi.read()
-    fi.close()
-    if md5:
-        assert hashlib.md5(data).hexdigest() == md5
-    with open(dst_path, 'wb') as fo:
-        fo.write(data)
 
 
 def tar_xf(tarball, dir_path, mode='r:*'):

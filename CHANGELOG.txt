@@ -1,9 +1,39 @@
-2013-XX-XX   2.0.0:
+2013-XX-XX   2.0.3:
+-------------------
+  * update bundle format (TODO)
+
+
+2013-10-27   2.0.2:
+-------------------
+  * add --index-cache option to clean command, see issue #321
+  * use RPATH (instead of RUNPATH) when building packages on Linux
+
+
+2013-10-23   2.0.1:
+-------------------
+  * add --no-prompt option to conda skeleton pypi
+  * add create_default_packages to condarc (and --no-default-packages option
+    to create command)
+
+
+2013-10-01   2.0.0:
 -------------------
   * added user/root mode and ability to soft-link across filesystems
+  * added create --clone option for copying local environments
   * fixed behavior when installing into an environment which does not
     exist yet, i.e. an error occurs
   * fixed install --no-deps option
+  * added --export option to list command
+  * allow building of packages in "user mode"
+  * regular environment locations now used for build and test
+  * add ability to disallow specification names
+  * add ability to read help messages from a file when install location is RO
+  * restore backwards compatibility of share/clone for conda-api
+  * add new conda bundle command and format
+  * pass ARCH environment variable to build scripts
+  * added progress bar to source download for conda build, issue #230
+  * added ability to use url instead of local file to conda install --file
+    and conda create --file options
 
 
 2013-09-06   1.9.1:

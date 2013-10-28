@@ -59,18 +59,19 @@ def execute(args, parser):
     import sys
 
     import conda.plan as plan
+    from conda.api import get_index
     from conda.cli import pscheck
+    from conda.install import rm_rf, linked
 
     if not (args.all or args.package_names):
         sys.exit('Error: no package names supplied,\n'
                  '       try "conda remove -h" for more details')
 
     prefix = common.get_prefix(args)
+    common.check_write('remove', prefix)
 
     index = None
     if args.features:
-        from conda.api import get_index
-
         channel_urls = args.channel or ()
 
         common.ensure_override_channels_requires_channel(args)
@@ -80,8 +81,6 @@ def execute(args, parser):
         actions = plan.remove_features_actions(prefix, index, features)
 
     elif args.all:
-        from conda.install import linked
-
         if plan.is_root_prefix(prefix):
             sys.exit('Error: cannot remove root environment,\n'
                      '       add -n NAME or -p PREFIX option')
@@ -91,16 +90,18 @@ def execute(args, parser):
 
     else:
         specs = common.specs_from_args(args.package_names)
-        no_rm = common.root_no_rm
         if (plan.is_root_prefix(prefix) and
-            common.names_in_specs(no_rm, specs)):
+            common.names_in_specs(common.root_no_rm, specs)):
             sys.exit('Error: cannot remove %s from root environment' %
-                     ', '.join(no_rm))
+                     ', '.join(common.root_no_rm))
         actions = plan.remove_actions(prefix, specs)
 
     if plan.nothing_to_do(actions):
-        print('No packages found to remove from environment: %s' % prefix)
-        return
+        if args.all:
+            rm_rf(prefix)
+            return
+        sys.exit('Error: no packages found to remove from '
+                 'environment: %s' % prefix)
 
     print()
     print("Package plan for package removal in environment %s:" % prefix)
@@ -110,3 +111,6 @@ def execute(args, parser):
         common.confirm_yn(args)
 
     plan.execute_actions(actions, index, verbose=not args.quiet)
+
+    if args.all:
+        rm_rf(prefix)

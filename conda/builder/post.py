@@ -38,8 +38,7 @@ def fix_shebang(f, osx_is_app=False):
     with open(path) as fi:
         try:
             data = fi.read()
-        except UnicodeDecodeError:
-            # The file is binary
+        except UnicodeDecodeError: # file is binary
             return
     m = shebang_pat.match(data)
     if not (m and 'python' in m.group()):
@@ -143,7 +142,7 @@ def mk_relative(f):
 
     path = join(build_prefix, f)
     if sys.platform == 'linux2' and is_obj(path):
-        runpath = '$ORIGIN/' + utils.rel_lib(f)
+        rpath = '$ORIGIN/' + utils.rel_lib(f)
         chrpath = external.find_executable('chrpath')
         if chrpath is None:
             sys.exit("""\
@@ -153,25 +152,26 @@ Error:
     relocatable ELF libraries.  You can install chrpath using apt-get,
     yum or conda.
 """ % (os.pathsep.join(external.dir_paths)))
-        call([chrpath, '-c', '-r', runpath, path])
+        call([chrpath, '-r', rpath, path])
 
     if sys.platform == 'darwin' and is_obj(path):
         mk_relative_osx(path)
 
 
-def fix_permissions():
-    for root, dirs, files in os.walk(build_prefix):
+def fix_permissions(files):
+    for root, dirs, unused_files in os.walk(build_prefix):
         for dn in dirs:
             os.chmod(join(root, dn), int('755', 8))
-        for fn in files:
-            p = join(root, fn)
-            st = os.stat(p)
-            os.chmod(p, stat.S_IMODE(st.st_mode) | stat.S_IWUSR) # chmod u+w
+
+    for f in files:
+        path = join(build_prefix, f)
+        st = os.stat(path)
+        os.chmod(path, stat.S_IMODE(st.st_mode) | stat.S_IWUSR) # chmod u+w
 
 
 def post_build(files):
     print('number of files:', len(files))
-    fix_permissions()
+    fix_permissions(files)
     for f in files:
         if sys.platform != 'win32':
             mk_relative(f)

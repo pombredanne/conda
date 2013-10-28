@@ -91,11 +91,14 @@ def execute(args, parser):
     import sys
     from os.path import isdir
 
+    import conda.config as config
     import conda.plan as plan
     from conda.api import get_index
     from conda.cli import pscheck
 
+
     prefix = common.get_prefix(args)
+    config.set_pkgs_dirs(prefix)
 
     # handle tar file containaing conda packages
     if len(args.packages) == 1:
@@ -117,7 +120,7 @@ def execute(args, parser):
         args.no_deps = True
 
     if args.file:
-        specs = common.specs_from_file(args.file)
+        specs = common.specs_from_url(args.file)
     else:
         specs = common.specs_from_args(args.packages)
 
@@ -148,7 +151,7 @@ Error: environment does not exist: %s
     if plan.nothing_to_do(actions):
         from conda.cli.main_list import list_packages
 
-        regex = '^(%s)$' %  '|'.join(spec_names)
+        regex = '^(%s)$' % '|'.join(spec_names)
         print('# All requested packages already installed.')
         list_packages(prefix, regex)
         return
@@ -156,6 +159,7 @@ Error: environment does not exist: %s
     print()
     print("Package plan for installation in environment %s:" % prefix)
     plan.display_actions(actions, index)
+    common.check_write('install', prefix)
 
     if not pscheck.main(args):
         common.confirm_yn(args)

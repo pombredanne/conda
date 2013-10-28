@@ -1,3 +1,6 @@
+# NOTE:
+#     This module is deprecated.  Don't import from this here when writing
+#     new code.
 from __future__ import print_function, division, absolute_import
 
 import os
@@ -10,11 +13,12 @@ from os.path import abspath, basename, isdir, join
 
 import conda.config as config
 from conda.api import get_index
+from conda.misc import untracked
 from conda.resolve import MatchSpec
 import conda.install as install
 import conda.plan as plan
 
-from conda.builder.packup import untracked, create_conda_pkg
+from conda.builder.packup import create_conda_pkg
 
 
 def get_requires(prefix):
@@ -36,7 +40,7 @@ def update_info(info):
     h.update(info['file_hash'].encode('utf-8'))
     info['version'] = h.hexdigest()
 
-def create_bundle(prefix):
+def old_create_bundle(prefix):
     """
     Create a "bundle package" of the environment located in `prefix`,
     and return the full path to the created package.  This file is
@@ -69,7 +73,7 @@ def create_bundle(prefix):
     return path, warnings
 
 
-def clone_bundle(path, prefix):
+def old_clone_bundle(path, prefix):
     """
     Clone the bundle (located at `path`) by creating a new environment at
     `prefix`.
@@ -84,17 +88,18 @@ def clone_bundle(path, prefix):
     assert re.match(r'share-[0-9a-f]{40}-\d+\.tar\.bz2$', fn), fn
     dist = fn[:-8]
 
-    if not install.is_extracted(config.pkgs_dir, dist):
-        shutil.copyfile(path, join(config.pkgs_dir, dist + '.tar.bz2'))
+    pkgs_dir = config.pkgs_dirs[0]
+    if not install.is_extracted(pkgs_dir, dist):
+        shutil.copyfile(path, join(pkgs_dir, dist + '.tar.bz2'))
         plan.execute_plan(['%s %s' % (plan.EXTRACT, dist)])
-    assert install.is_extracted(config.pkgs_dir, dist)
+    assert install.is_extracted(pkgs_dir, dist)
 
-    with open(join(config.pkgs_dir, dist, 'info', 'index.json')) as fi:
+    with open(join(pkgs_dir, dist, 'info', 'index.json')) as fi:
         meta = json.load(fi)
 
     # for backwards compatibility, use "requires" when "depends" is not there
     dists = ['-'.join(r.split())
-             for r in meta.get('depends', meta.get('requires'))
+             for r in meta.get('depends', meta.get('requires', []))
              if not r.startswith('conda ')]
     dists.append(dist)
 
@@ -104,12 +109,3 @@ def clone_bundle(path, prefix):
     plan.execute_actions(actions, index, verbose=True)
 
     os.unlink(join(prefix, 'conda-meta', dist + '.json'))
-
-
-if __name__ == '__main__':
-    #path, warnings = create_bundle(config.root_dir)
-    #print(warnings)
-    #os.system('tarinfo --si ' + path)
-    path = ('/Users/ilan/src/'
-            'share-fffeff0d78414137f40fff7065c1cfc77f0dd317-0.tar.bz2')
-    clone_bundle(path, join(config.envs_dirs[0], 'test3'))

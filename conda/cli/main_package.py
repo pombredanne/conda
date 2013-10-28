@@ -9,7 +9,7 @@ from __future__ import print_function, division, absolute_import
 from conda.cli import common
 
 
-descr = "Create a conda package in an environment. (ADVANCED)"
+descr = "Low-level conda package utility. (ADVANCED)"
 
 
 def configure_parser(sub_parsers):
@@ -35,11 +35,6 @@ def configure_parser(sub_parsers):
         '-u', "--untracked",
         action  = "store_true",
         help    = "display all untracked files and exit",
-    )
-    p.add_argument(
-        "--share",
-        action  = "store_true",
-        help = 'Create a "share package"',
     )
     p.add_argument(
         "--pkg-name",
@@ -72,7 +67,8 @@ def execute(args, parser):
     import sys
     from os.path import basename
 
-    from conda.builder.packup import make_tarbz2, untracked, remove
+    from conda.misc import untracked
+    from conda.builder.packup import make_tarbz2, remove
 
 
     prefix = common.get_prefix(args)
@@ -111,15 +107,6 @@ def execute(args, parser):
         print('# untracked files: %d' % len(files))
         for fn in files:
             print(fn)
-        return
-
-    if args.share:
-        from conda.builder.share import create_bundle
-
-        path, warnings = create_bundle(prefix)
-        for w in warnings:
-            print("Warning:", w)
-        print(path)
         return
 
     make_tarbz2(prefix,

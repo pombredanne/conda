@@ -5,7 +5,8 @@
 # automatically include all default channels.
 
 channels:
-  - defaults
+  - http://repo.continuum.io/pkgs/free
+  - http://repo.continuum.io/pkgs/pro
   - http://some.custom/channel
 
 # Proxy settings
@@ -13,3 +14,16 @@ channels:
 proxy_servers:
     http: http://user:pass@corp.com:8080
     https: https://user:pass@corp.com:8080
+
+envs_dirs:
+  - /home/joe/my-envs
+  - /opt/anaconda/envs
+
+changeps1: False
+
+# binstar.org upload (not defined here means ask)
+binstar_upload: True
+
+# disallowed specification names
+# disallow:
+#   - anaconda

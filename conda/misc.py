@@ -9,19 +9,116 @@ import shutil
 import subprocess
 from collections import defaultdict
 from distutils.spawn import find_executable
-from os.path import abspath, basename, expanduser, join
+from os.path import (abspath, basename, dirname, expanduser,
+                     isdir, isfile, islink, join)
 
 from conda import config
 from conda import install
-from conda.plan import RM_EXTRACTED, EXTRACT, UNLINK, LINK, execute_actions
+from conda.api import get_index
+from conda.plan import (RM_EXTRACTED, EXTRACT, UNLINK, LINK,
+                        ensure_linked_actions, execute_actions)
 from conda.compat import iteritems
 
 
-def clone_env(prefix1, prefix2):
+
+def conda_installed_files(prefix, exclude_self_build=False):
+    """
+    Return the set of files which have been installed (using conda) into
+    a given prefix.
+    """
+    res = set()
+    for dist in install.linked(prefix):
+        meta = install.is_linked(prefix, dist)
+        if exclude_self_build and 'file_hash' in meta:
+            continue
+        res.update(set(meta['files']))
+    return res
+
+
+def rel_path(prefix, path):
+    res = path[len(prefix) + 1:]
+    if sys.platform == 'win32':
+        res = res.replace('\\', '/')
+    return res
+
+
+def walk_prefix(prefix):
+    """
+    Return the set of all files in a given prefix directory.
+    """
+    res = set()
+    prefix = abspath(prefix)
+    ignore = {'pkgs', 'envs', 'conda-bld', 'conda-meta', '.conda_lock',
+              'users', 'LICENSE.txt', 'info', '.index', '.unionfs'}
+    if sys.platform == 'darwin':
+        ignore.update({'python.app', 'Launcher.app'})
+    for fn in os.listdir(prefix):
+        if fn in ignore:
+            continue
+        if isfile(join(prefix, fn)):
+            res.add(fn)
+            continue
+        for root, dirs, files in os.walk(join(prefix, fn)):
+            for fn in files:
+                res.add(rel_path(prefix, join(root, fn)))
+            for dn in dirs:
+                path = join(root, dn)
+                if islink(path):
+                    res.add(rel_path(prefix, path))
+    return res
+
+
+def untracked(prefix, exclude_self_build=False):
+    """
+    Return (the set) of all untracked files for a given prefix.
+    """
+    conda_files = conda_installed_files(prefix, exclude_self_build)
+    return {path for path in walk_prefix(prefix) - conda_files
+            if not (path.endswith('~') or (path.endswith('.pyc') and
+                                           path[:-1] in conda_files))}
+
+
+def discard_conda(dists):
+    return [dist for dist in dists if not install.name_dist(dist) == 'conda']
+
+
+def clone_env(prefix1, prefix2, verbose=True):
     """
     clone existing prefix1 into new prefix2
     """
-    raise NotImplementedError
+    untracked_files = untracked(prefix1)
+    dists = discard_conda(install.linked(prefix1))
+    print('Packages: %d' % len(dists))
+    print('Files: %d' % len(untracked_files))
+
+    for f in untracked_files:
+        src = join(prefix1, f)
+        dst = join(prefix2, f)
+        dst_dir = dirname(dst)
+        if islink(dst_dir) or isfile(dst_dir):
+            os.unlink(dst_dir)
+        if not isdir(dst_dir):
+            os.makedirs(dst_dir)
+
+        try:
+            with open(src, 'rb') as fi:
+                data = fi.read()
+        except IOError:
+            continue
+
+        try:
+            s = data.decode('utf-8')
+            s = s.replace(prefix1, prefix2)
+            data = s.encode('utf-8')
+        except UnicodeDecodeError: # data is binary
+            pass
+
+        with open(dst, 'wb') as fo:
+            fo.write(data)
+        shutil.copystat(src, dst)
+
+    actions = ensure_linked_actions(dists, prefix2)
+    execute_actions(actions, index=get_index(), verbose=verbose)
 
 
 def install_local_packages(prefix, paths, verbose=False):
@@ -31,7 +128,7 @@ def install_local_packages(prefix, paths, verbose=False):
         assert src_path.endswith('.tar.bz2')
         fn = basename(src_path)
         dists.append(fn[:-8])
-        dst_path = join(config.pkgs_dir, fn)
+        dst_path = join(config.pkgs_dirs[0], fn)
         if abspath(src_path) == abspath(dst_path):
             continue
         shutil.copyfile(src_path, dst_path)

@@ -6,10 +6,11 @@
 
 from __future__ import print_function, division, absolute_import
 
-import subprocess
+import sys
 
 from conda.cli import common
 import conda.config as config
+
 
 help = "Build a package from a (conda) recipe. (ADVANCED)"
 
@@ -22,14 +23,14 @@ def configure_parser(sub_parsers):
     p.add_argument(
         '-c', "--check",
         action = "store_true",
-        help   = "only check (validate) the recipe",
+        help = "only check (validate) the recipe",
     )
     p.add_argument(
         "--no-binstar-upload",
         action = "store_false",
         help = "do not ask to upload the package to binstar",
-        dest='binstar_upload',
-        default=config.binstar_upload,
+        dest = 'binstar_upload',
+        default = config.binstar_upload,
     )
     p.add_argument(
         "--output",
@@ -39,21 +40,55 @@ def configure_parser(sub_parsers):
     )
     p.add_argument(
         '-s', "--source",
-        action  = "store_true",
-        help    = "only obtain the source (but don't build)",
+        action = "store_true",
+        help = "only obtain the source (but don't build)",
     )
     p.add_argument(
         '-t', "--test",
-        action  = "store_true",
-        help    = "test package (assumes package is already build)",
+        action = "store_true",
+        help = "test package (assumes package is already build)",
     )
-    p.add_argument('recipe',
-                   action="store",
-                   metavar='PATH',
-                   nargs='+',
-                   help="path to recipe directory",
+    p.add_argument(
+        'recipe',
+        action = "store",
+        metavar = 'PATH',
+        nargs = '+',
+        help = "path to recipe directory",
     )
     p.set_defaults(func=execute)
+
+
+def handle_binstar_upload(path, args):
+    import subprocess
+    from conda.builder.external import find_executable
+
+    if args.binstar_upload is None:
+        args.yes = False
+        args.dry_run = False
+        upload = common.confirm_yn(
+            args,
+            message="Do you want to upload this "
+            "package to binstar", default='yes', exit_no=False)
+    else:
+        upload = args.binstar_upload
+
+    if not upload:
+        print("""\
+# If you want to upload this package to binstar.org later, type:
+#
+# $ binstar upload %s
+""" % path)
+        return
+
+    binstar = find_executable('binstar')
+    if binstar is None:
+        sys.exit('''
+Error: cannot locate binstar (required for upload)
+# Try:
+# $ conda install binstar
+''')
+    print("Uploading to binstar")
+    subprocess.call([binstar, 'upload', path])
 
 
 def execute(args, parser):
@@ -63,12 +98,11 @@ def execute(args, parser):
     import tempfile
     from os.path import abspath, isdir, isfile
 
-    import conda.builder.build as build
-    from conda.builder.external import find_executable
-    from conda.builder.config import croot
-    import conda.builder.source as source
-    from conda.builder.metadata import MetaData
     from conda.lock import Locked
+    import conda.builder.build as build
+    import conda.builder.source as source
+    from conda.builder.config import croot
+    from conda.builder.metadata import MetaData
 
     with Locked(croot):
         for arg in args.recipe:
@@ -105,33 +139,9 @@ def execute(args, parser):
                 print('Source tree in:', source.get_dir())
             else:
                 build.build(m)
+                build.test(m)
 
             if need_cleanup:
                 shutil.rmtree(recipe_dir)
 
-            if args.binstar_upload is None:
-                args.yes = False
-                args.dry_run = False
-                upload = common.confirm_yn(
-                    args,
-                    message="Do you want to upload this "
-                    "package to binstar", default='yes', exit_no=False)
-            else:
-                upload = args.binstar_upload
-
-            if not upload:
-                print("""\
-# If you want to upload this package to binstar.org later, type:
-#
-# $ binstar upload %s
-""" % build.bldpkg_path(m))
-                continue
-
-            binstar = find_executable('binstar')
-            if binstar is None:
-                sys.exit('''
-Error: cannot locate binstar (required for upload)
-# Try:
-# $ conda install binstar
-''')
-            subprocess.call([binstar, 'upload', build.bldpkg_path(m)])
+            handle_binstar_upload(build.bldpkg_path(m), args)

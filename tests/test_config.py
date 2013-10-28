@@ -28,29 +28,30 @@ class TestConfig(unittest.TestCase):
 
     def test_globals(self):
         self.assertTrue(config.root_dir)
-        self.assertTrue(config.pkgs_dir)
-        self.assertTrue(config.envs_dir)
+        self.assertTrue(config.pkgs_dirs)
+        self.assertTrue(config.envs_dirs)
         self.assertTrue(config.default_prefix)
         self.assertTrue(config.platform)
-        self.assertTrue(config.bits)
         self.assertTrue(config.subdir)
         self.assertTrue(config.arch_name)
+        self.assertTrue(config.bits in (32, 64))
 
-#    def test_channel_urls(self):
-#        config.subdir = 'foo'
-#        urls = config.get_channel_urls()
-#        self.assertEqual(urls,
-#                         ['http://repo.continuum.io/pkgs/dev/foo/',
-#                          'http://repo.continuum.io/pkgs/gpl/foo/',
-#                          'http://repo.continuum.io/pkgs/free/foo/'])
-
+    def test_pkgs_dir_prefix(self):
+        root_dir = config.root_dir
+        root_pkgs = join(root_dir, 'pkgs')
+        for pi, po in [
+            (root_dir, root_pkgs),
+            (join(root_dir, 'envs', 'foo'), root_pkgs),
+            ('/usr/local/foo', '/usr/local/.pkgs'),
+            ]:
+            self.assertEqual(config.pkgs_dir_prefix(pi), po)
 
     def test_proxy_settings(self):
+        # reload the config file
         config.rc = config.load_condarc(config.rc_path)
-        servers = config.get_proxy_servers()
-        self.assertEqual(len(servers),2)
-        self.assertEqual(servers['http'],'http://user:pass@corp.com:8080')
-        self.assertEqual(servers['https'], 'https://user:pass@corp.com:8080')
+        self.assertEqual(config.get_proxy_servers(),
+                         {'http': 'http://user:pass@corp.com:8080',
+                          'https': 'https://user:pass@corp.com:8080'})
 
 
 if __name__ == '__main__':

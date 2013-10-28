@@ -33,6 +33,11 @@ def configure_parser(sub_parsers):
 
     common.add_parser_yes(p)
     p.add_argument(
+        "-i", "--index-cache",
+        action = "store_true",
+        help = "remove index cache",
+    )
+    p.add_argument(
         "-l", "--lock",
         action = "store_true",
         help = "remove all conda lock files",
@@ -61,10 +66,11 @@ def rm_lock():
 def rm_tarballs(args):
     from os.path import join, getsize
 
-    print('Cache location: %s' % config.pkgs_dir)
+    pkgs_dir = config.pkgs_dirs[0]
+    print('Cache location: %s' % pkgs_dir)
 
     rmlist = []
-    for fn in os.listdir(config.pkgs_dir):
+    for fn in os.listdir(pkgs_dir):
         if fn.endswith('.tar.bz2') or fn.endswith('.tar.bz2.part'):
             rmlist.append(fn)
 
@@ -78,7 +84,7 @@ def rm_tarballs(args):
     maxlen = len(max(rmlist, key=lambda x: len(str(x))))
     fmt = "%-40s %10s"
     for fn in rmlist:
-        size = getsize(join(config.pkgs_dir, fn))
+        size = getsize(join(pkgs_dir, fn))
         totalsize += size
         print(fmt % (fn, human_bytes(size)))
     print('-' * (maxlen + 2 + 10))
@@ -89,7 +95,16 @@ def rm_tarballs(args):
 
     for fn in rmlist:
         print("removing %s" % fn)
-        os.unlink(os.path.join(config.pkgs_dir, fn))
+        os.unlink(os.path.join(pkgs_dir, fn))
+
+
+def rm_index_cache():
+    from os.path import join
+
+    from conda.config import pkgs_dirs
+    from conda.install import rm_rf
+
+    rm_rf(join(pkgs_dirs[0], 'cache'))
 
 
 def execute(args, parser):
@@ -97,3 +112,5 @@ def execute(args, parser):
         rm_lock()
     if args.tarballs:
         rm_tarballs(args)
+    if args.index_cache:
+        rm_index_cache()

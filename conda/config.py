@@ -10,7 +10,7 @@ import os
 import sys
 import logging
 from platform import machine
-from os.path import abspath, expanduser, isfile, isdir, join
+from os.path import abspath, dirname, expanduser, isfile, isdir, join
 
 from conda.compat import PY3
 from conda.install import try_write
@@ -28,6 +28,8 @@ _sys_map = {'linux2': 'linux', 'linux': 'linux',
             'darwin': 'osx', 'win32': 'win'}
 platform = _sys_map.get(sys.platform, 'unknown')
 bits = 8 * tuple.__itemsize__
+if os.getenv('ARCH'):
+    bits = 64 if '64' in os.getenv('ARCH', '') else 32
 
 if platform == 'linux' and machine() == 'armv6l':
     subdir = 'linux-armv6l'
@@ -67,7 +69,7 @@ def load_condarc(path):
         sys.exit('Error: could not import yaml (required to read .condarc '
                  'config file)')
 
-    return yaml.load(open(path))
+    return yaml.load(open(path)) or {}
 
 rc = load_condarc(rc_path)
 
@@ -75,38 +77,50 @@ rc = load_condarc(rc_path)
 
 root_dir = abspath(expanduser(os.getenv('CONDA_ROOT',
                                         rc.get('root_dir', sys.prefix))))
+root_writable = try_write(root_dir)
+root_env_name = 'root'
 
-def pathsep_env(name):
+def _pathsep_env(name):
     x = os.getenv(name)
     if x:
         return x.split(os.pathsep)
     else:
         return []
 
-def default_dirs(tp='pkgs'):
-    lst = [join(root_dir, tp)]
-    if not try_write(lst[0]):
-        lst.insert(0, abspath(join(expanduser('~/conda'), tp)))
+def _default_envs_dirs():
+    lst = [join(root_dir, 'envs')]
+    if not root_writable:
+        lst.insert(0, '~/envs')
     return lst
 
-pkgs_dirs = [abspath(expanduser(path)) for path in (
-        pathsep_env('CONDA_PACKAGE_CACHE') or
-        rc.get('pkgs_dirs') or
-        default_dirs('pkgs')
-        )]
 envs_dirs = [abspath(expanduser(path)) for path in (
-        pathsep_env('CONDA_ENV_PATH') or
+        _pathsep_env('CONDA_ENVS_PATH') or
         rc.get('envs_dirs') or
-        default_dirs('envs')
+        _default_envs_dirs()
         )]
 
-pkgs_dir = pkgs_dirs[0]
-envs_dir = envs_dirs[0]
+def pkgs_dir_prefix(prefix):
+    if (abspath(prefix) == root_dir or
+            abspath(dirname(prefix)) == abspath(join(root_dir, 'envs'))):
+        return join(root_dir, 'pkgs')
+    else:
+        return abspath(join(prefix, '..', '.pkgs'))
+
+def set_pkgs_dirs(prefix=None):
+    global pkgs_dirs
+
+    pkgs_dirs = [pkgs_dir_prefix(prefix)] if prefix else []
+    for envs_dir in envs_dirs:
+        pkgs_dir = pkgs_dir_prefix(join(envs_dir, 'dummy'))
+        if pkgs_dir not in pkgs_dirs:
+            pkgs_dirs.append(pkgs_dir)
+
+set_pkgs_dirs()
 
 # ----- default environment prefix -----
 
 _default_env = os.getenv('CONDA_DEFAULT_ENV')
-if not _default_env:
+if _default_env in (None, root_env_name):
     default_prefix = root_dir
 elif os.sep in _default_env:
     default_prefix = abspath(_default_env)
@@ -122,6 +136,9 @@ else:
 
 changeps1 = rc.get('changeps1', True)
 binstar_upload = rc.get('binstar_upload', None) # None means ask
+disallow = set(rc.get('disallow', []))
+# packages which are added to a newly created environment by default
+create_default_packages = list(rc.get('create_default_packages', []))
 
 # ----- channels -----
 
@@ -167,12 +184,5 @@ def get_channel_urls():
 
 # ----- proxy -----
 
-def get_rc_proxy_servers():
-    return rc.get('proxy_servers',None)
-
 def get_proxy_servers():
-    if 'proxy_servers' not in rc:
-        proxy_servers = None
-    else:
-        proxy_servers = get_rc_proxy_servers()
-    return proxy_servers
+    return rc.get('proxy_servers')

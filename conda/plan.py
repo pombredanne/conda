@@ -17,7 +17,6 @@ from os.path import abspath, isfile, join
 
 from conda import config
 from conda import install
-from conda.naming import name_dist
 from conda.utils import md5_file, human_bytes
 from conda.fetch import fetch_pkg
 from conda.resolve import MatchSpec, Resolve
@@ -49,10 +48,11 @@ def print_dists(dists_extras):
         print(line)
 
 def split_linkarg(arg):
+    #print('XXX', config.pkgs_dirs)
     "Return tuple(dist, pkgs_dir, linktype)"
     args = arg.split()
     if len(args) == 1:
-        return args[0], config.pkgs_dir, install.LINK_HARD
+        return args[0], config.pkgs_dirs[0], install.LINK_HARD
     elif len(args) == 3:
         return args[0], args[1], int(args[2])
     else:
@@ -74,8 +74,7 @@ def display_actions(actions, index=None):
         lst = []
         for arg in actions[LINK]:
             dist, pkgs_dir, lt = split_linkarg(arg)
-            extra = '   %s (%d)' % (install.link_name_map.get(lt),
-                                    config.pkgs_dirs.index(pkgs_dir))
+            extra = '   %s' % install.link_name_map.get(lt)
             lst.append((dist, extra))
         print_dists(lst)
     print()
@@ -139,7 +138,7 @@ def ensure_linked_actions(dists, prefix):
 
         actions[LINK].append(dist)
         actions[EXTRACT].append(dist)
-        if install.is_fetched(config.pkgs_dir, dist):
+        if install.is_fetched(config.pkgs_dirs[0], dist):
             continue
         actions[FETCH].append(dist)
     return actions
@@ -152,7 +151,7 @@ def force_linked_actions(dists, index, prefix):
                            UNLINK, LINK)
     for dist in dists:
         fn = dist + '.tar.bz2'
-        pkg_path = join(config.pkgs_dir, fn)
+        pkg_path = join(config.pkgs_dirs[0], fn)
         if isfile(pkg_path):
             if md5_file(pkg_path) != index[fn]['md5']:
                 actions[RM_FETCHED].append(dist)
@@ -179,7 +178,7 @@ def add_defaults_to_specs(r, linked, specs):
     if r.explicit(specs):
         return
     log.debug('H0 specs=%r' % specs)
-    names_linked = {name_dist(dist): dist for dist in linked}
+    names_linked = {install.name_dist(dist): dist for dist in linked}
     names_ms = {MatchSpec(s).name: MatchSpec(s) for s in specs}
 
     for name, def_ver in [('python', config.default_python),
@@ -232,7 +231,7 @@ def install_actions(prefix, index, specs, force=False, only_names=None):
     must_have = {}
     for fn in r.solve(specs, [d + '.tar.bz2' for d in linked]):
         dist = fn[:-8]
-        name = name_dist(dist)
+        name = install.name_dist(dist)
         if only_names and name not in only_names:
             continue
         must_have[name] = dist
@@ -257,7 +256,7 @@ def install_actions(prefix, index, specs, force=False, only_names=None):
         actions = ensure_linked_actions(smh, prefix)
 
     for dist in sorted(linked):
-        name = name_dist(dist)
+        name = install.name_dist(dist)
         if name in must_have and dist != must_have[name]:
             actions[UNLINK].append(dist)
 
@@ -337,7 +336,7 @@ def execute_plan(plan, index=None, verbose=False):
     for cmd, arg in cmds:
         if i is not None and cmd in progress_cmds:
             i += 1
-            getLogger('progress.update').info((name_dist(arg), i))
+            getLogger('progress.update').info((install.name_dist(arg), i))
 
         if cmd == PREFIX:
             prefix = arg
@@ -350,11 +349,11 @@ def execute_plan(plan, index=None, verbose=False):
             maxval = int(arg)
             getLogger('progress.start').info(maxval)
         elif cmd == EXTRACT:
-            install.extract(config.pkgs_dir, arg)
+            install.extract(config.pkgs_dirs[0], arg)
         elif cmd == RM_EXTRACTED:
-            install.rm_extracted(config.pkgs_dir, arg)
+            install.rm_extracted(config.pkgs_dirs[0], arg)
         elif cmd == RM_FETCHED:
-            install.rm_fetched(config.pkgs_dir, arg)
+            install.rm_fetched(config.pkgs_dirs[0], arg)
         elif cmd == LINK:
             link(prefix, arg)
         elif cmd == UNLINK:

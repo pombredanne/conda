@@ -10,7 +10,6 @@ from argparse import RawDescriptionHelpFormatter
 
 from conda.cli import common
 
-import conda.config as config
 
 descr = "Update conda packages."
 example = """
@@ -45,6 +44,7 @@ def execute(args, parser):
     import sys
 
     import conda.install as ci
+    import conda.config as config
     import conda.plan as plan
     from conda.api import get_index
 
@@ -59,14 +59,15 @@ def execute(args, parser):
 """)
 
     prefix = common.get_prefix(args)
-    linked = set(plan.name_dist(d) for d in ci.linked(prefix))
+    config.set_pkgs_dirs(prefix)
+    linked = set(ci.name_dist(d) for d in ci.linked(prefix))
     for name in args.pkg_names:
         common.arg2spec(name)
         if '=' in name:
             sys.exit("Invalid package name: '%s'" % (name))
         if name not in linked:
             sys.exit("Error: package '%s' is not installed in %s" %
-                     (name, config.default_prefix))
+                     (name, prefix))
 
     common.ensure_override_channels_requires_channel(args)
     channel_urls = args.channel or ()
@@ -84,6 +85,7 @@ def execute(args, parser):
 
     print("Updating conda environment at %s" % prefix)
     plan.display_actions(actions, index)
+    common.check_write('update', prefix)
 
     if not pscheck.main(args):
         common.confirm_yn(args)
