@@ -41,7 +41,7 @@ def configure_parser(sub_parsers):
     p.add_argument(
         "--clone",
         action = "store",
-        help = 'path to (or name of) existing environment',
+        help = 'path to (or name of) existing local environment',
         metavar = 'ENV',
     )
     p.add_argument(
@@ -112,6 +112,7 @@ def execute(args, parser):
     import conda.config as config
     import conda.plan as plan
     from conda.api import get_index
+    from conda.misc import touch_nonadmin
 
     common.ensure_name_or_prefix(args, 'create')
     prefix = common.get_prefix(args, search=False)
@@ -122,6 +123,7 @@ def execute(args, parser):
         if args.package_specs:
             sys.exit('Error: did not expect any arguments for --clone')
         clone(args.clone, prefix)
+        touch_nonadmin(prefix)
         print_activate(args.name if args.name else prefix)
         return
 
@@ -156,5 +158,5 @@ def execute(args, parser):
 
     common.confirm_yn(args)
     plan.execute_actions(actions, index, verbose=not args.quiet)
-
+    touch_nonadmin(prefix)
     print_activate(args.name if args.name else prefix)

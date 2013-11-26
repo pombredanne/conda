@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from collections import defaultdict
 from distutils.spawn import find_executable
-from os.path import (abspath, basename, dirname, expanduser,
+from os.path import (abspath, basename, dirname, expanduser, exists,
                      isdir, isfile, islink, join)
 
 from conda import config
@@ -49,7 +49,9 @@ def walk_prefix(prefix):
     res = set()
     prefix = abspath(prefix)
     ignore = {'pkgs', 'envs', 'conda-bld', 'conda-meta', '.conda_lock',
-              'users', 'LICENSE.txt', 'info', '.index', '.unionfs'}
+              'users', 'LICENSE.txt', 'info', 'conda-recipes',
+              'users', 'LICENSE.txt', 'info',
+              '.index', '.unionfs', '.nonadmin'}
     if sys.platform == 'darwin':
         ignore.update({'python.app', 'Launcher.app'})
     for fn in os.listdir(prefix):
@@ -74,12 +76,24 @@ def untracked(prefix, exclude_self_build=False):
     """
     conda_files = conda_installed_files(prefix, exclude_self_build)
     return {path for path in walk_prefix(prefix) - conda_files
-            if not (path.endswith('~') or (path.endswith('.pyc') and
-                                           path[:-1] in conda_files))}
+            if not (path.endswith('~') or
+                     (sys.platform=='darwin' and path.endswith('.DS_Store')) or
+                     (path.endswith('.pyc') and path[:-1] in conda_files))}
 
 
 def discard_conda(dists):
     return [dist for dist in dists if not install.name_dist(dist) == 'conda']
+
+
+def touch_nonadmin(prefix):
+    """
+    Creates $PREFIX/.nonadmin if sys.prefix/.nonadmin exists (on Windows)
+    """
+    if sys.platform == 'win32' and exists(join(config.root_dir, '.nonadmin')):
+        if not isdir(prefix):
+            os.makedirs(prefix)
+        with open(join(prefix, '.nonadmin'), 'w') as fo:
+            fo.write('')
 
 
 def clone_env(prefix1, prefix2, verbose=True):

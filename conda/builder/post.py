@@ -6,9 +6,7 @@ import sys
 import stat
 from glob import glob
 from subprocess import call, check_call
-from os.path import basename, join, splitext
-
-from conda.install import prefix_placeholder
+from os.path import basename, join, splitext, isdir
 
 from conda.builder.config import build_prefix, build_python, PY3K
 from conda.builder import external
@@ -44,9 +42,9 @@ def fix_shebang(f, osx_is_app=False):
     if not (m and 'python' in m.group()):
         return
 
-    py_exec = (prefix_placeholder + '/python.app/Contents/MacOS/python'
+    py_exec = (build_prefix + '/python.app/Contents/MacOS/python'
                if sys.platform == 'darwin' and osx_is_app else
-               prefix_placeholder + '/bin/' + basename(build_python))
+               build_prefix + '/bin/' + basename(build_python))
     new_data = shebang_pat.sub('#!' + py_exec, data, count=1)
     if new_data == data:
         return
@@ -67,12 +65,14 @@ def rm_egg_dirs():
         except OSError:
             pass
         utils.rm_rf(join(egg_dir, 'EGG-INFO'))
-        for fn in os.listdir(egg_dir):
-            if fn == '__pycache__':
-                utils.rm_rf(join(egg_dir, fn))
-            else:
-                os.rename(join(egg_dir, fn), join(sp_dir, fn))
+        if isdir(egg_dir):
+            for fn in os.listdir(egg_dir):
+                if fn == '__pycache__':
+                    utils.rm_rf(join(egg_dir, fn))
+                else:
+                    os.rename(join(egg_dir, fn), join(sp_dir, fn))
         utils.rm_rf(join(sp_dir, 'easy-install.pth'))
+
 
 def rm_py_along_so():
     "remove .py (.pyc) files alongside .so or .pyd files"

@@ -232,6 +232,7 @@ def post_link(prefix, dist, unlink=False):
         args = ['/bin/bash', path]
     env = os.environ
     env['PREFIX'] = prefix
+    env['PKG_NAME'], env['PKG_VERSION'], unused_build = dist.rsplit('-', 2)
     subprocess.call(args, env=env)
 
 
@@ -269,8 +270,11 @@ def try_hard_link(pkgs_dir, prefix, dist):
 # ------- package cache ----- fetched
 
 def fetched(pkgs_dir):
-    return set(fn[:-8] for fn in os.listdir(pkgs_dir)
-               if fn.endswith('.tar.bz2'))
+    if isdir(pkgs_dir):
+        return set(fn[:-8] for fn in os.listdir(pkgs_dir)
+                   if fn.endswith('.tar.bz2'))
+    else:
+        return set()
 
 def is_fetched(pkgs_dir, dist):
     return isfile(join(pkgs_dir, dist + '.tar.bz2'))

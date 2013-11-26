@@ -64,20 +64,16 @@ def kill_processes():
     for n in psutil.get_pid_list():
         try:
             p = psutil.Process(n)
-        except psutil._error.NoSuchProcess:
-            continue
-        if p.name.lower() == 'msbuild.exe':
-            print('Terminating:', p.name)
-            try:
+            if p.name.lower() == 'msbuild.exe':
+                print('Terminating:', p.name)
                 p.terminate()
-            except psutil._error.NoSuchProcess:
-                print('    no such process, passing')
+        except:
+            continue
 
 
-def build(recipe_dir):
+def build(m):
     env = dict(os.environ)
-    env.update(environ.get_dict())
-    env['RECIPE_DIR'] = recipe_dir
+    env.update(environ.get_dict(m))
 
     for name in 'BIN', 'INC', 'LIB':
         path = env['LIBRARY_' + name]
@@ -85,7 +81,7 @@ def build(recipe_dir):
             os.makedirs(path)
 
     src_dir = source.get_dir()
-    bld_bat = join(recipe_dir, 'bld.bat')
+    bld_bat = join(m.path, 'bld.bat')
     with open(bld_bat) as fi:
         data = fi.read()
     with open(join(src_dir, 'bld.bat'), 'w') as fo:

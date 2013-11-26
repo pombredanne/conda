@@ -28,8 +28,6 @@ _sys_map = {'linux2': 'linux', 'linux': 'linux',
             'darwin': 'osx', 'win32': 'win'}
 platform = _sys_map.get(sys.platform, 'unknown')
 bits = 8 * tuple.__itemsize__
-if os.getenv('ARCH'):
-    bits = 64 if '64' in os.getenv('ARCH', '') else 32
 
 if platform == 'linux' and machine() == 'armv6l':
     subdir = 'linux-armv6l'
@@ -48,6 +46,7 @@ rc_list_keys = [
 rc_bool_keys = [
     'changeps1',
     'binstar_upload',
+    'binstar_personal'
     ]
 
 user_rc_path = abspath(expanduser('~/.condarc'))
@@ -132,14 +131,6 @@ else:
     else:
         default_prefix = join(envs_dirs[0], _default_env)
 
-# ----- misc -----
-
-changeps1 = rc.get('changeps1', True)
-binstar_upload = rc.get('binstar_upload', None) # None means ask
-disallow = set(rc.get('disallow', []))
-# packages which are added to a newly created environment by default
-create_default_packages = list(rc.get('create_default_packages', []))
-
 # ----- channels -----
 
 # Note, get_default_urls() and get_rc_urls() return unnormalized urls.
@@ -185,4 +176,18 @@ def get_channel_urls():
 # ----- proxy -----
 
 def get_proxy_servers():
-    return rc.get('proxy_servers')
+    res = rc.get('proxy_servers')
+    if res is None or isinstance(res, dict):
+        return res
+    sys.exit("Error: proxy_servers setting not a mapping")
+
+# ----- misc -----
+
+always_yes = rc.get('always_yes', False)
+changeps1 = rc.get('changeps1', True)
+use_pip = rc.get('use_pip', True)
+binstar_upload = rc.get('binstar_upload', None) # None means ask
+binstar_personal = rc.get('binstar_personal', True)
+disallow = set(rc.get('disallow', []))
+# packages which are added to a newly created environment by default
+create_default_packages = list(rc.get('create_default_packages', []))
