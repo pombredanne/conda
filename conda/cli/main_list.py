@@ -1,53 +1,106 @@
-# (c) 2012-2013 Continuum Analytics, Inc. / http://continuum.io
+# (c) Continuum Analytics, Inc. / http://continuum.io
 # All Rights Reserved
 #
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function, unicode_literals
 
+from argparse import RawDescriptionHelpFormatter
+import logging
+from os.path import isdir, isfile
 import re
-import sys
-from os.path import isdir
-import subprocess
 
-import conda.install as install
-import conda.config as config
-from conda.cli import common
-
+from .common import (add_parser_help, add_parser_json, add_parser_prefix,
+                     add_parser_show_channel_urls, disp_features, stdout_json)
+from ..base.constants import DEFAULTS_CHANNEL_NAME, UNKNOWN_CHANNEL
+from ..base.context import context
+from ..common.compat import text_type
+from ..core.linked_data import is_linked, linked, linked_data
+from ..egg_info import get_egg_info
+from ..exceptions import CondaEnvironmentNotFoundError, CondaFileNotFoundError
 
 descr = "List linked packages in a conda environment."
 
+# Note, the formatting of this is designed to work well with help2man
+examples = """
+Examples:
+
+List all packages in the current environment:
+
+    conda list
+
+List all packages installed into the environment 'myenv':
+
+    conda list -n myenv
+
+Save packages for future use:
+
+    conda list --export > package-list.txt
+
+Reinstall packages from an export file:
+
+    conda create -n myenv --file package-list.txt
+
+"""
+log = logging.getLogger(__name__)
 
 def configure_parser(sub_parsers):
     p = sub_parsers.add_parser(
         'list',
-        description = descr,
-        help = descr,
+        description=descr,
+        help=descr,
+        formatter_class=RawDescriptionHelpFormatter,
+        epilog=examples,
+        add_help=False,
     )
-    common.add_parser_prefix(p)
+    add_parser_help(p)
+    add_parser_prefix(p)
+    add_parser_json(p)
+    add_parser_show_channel_urls(p)
     p.add_argument(
         '-c', "--canonical",
-        action = "store_true",
-        help = "output canonical names of packages only",
+        action="store_true",
+        help="Output canonical names of packages only. Implies --no-pip. ",
+    )
+    p.add_argument(
+        '-f', "--full-name",
+        action="store_true",
+        help="Only search for full names, i.e., ^<regex>$.",
+    )
+    p.add_argument(
+        "--explicit",
+        action="store_true",
+        help="List explicitly all installed conda packaged with URL "
+             "(output may be used by conda create --file).",
+    )
+    p.add_argument(
+        "--md5",
+        action="store_true",
+        help="Add MD5 hashsum when using --explicit",
     )
     p.add_argument(
         '-e', "--export",
-        action = "store_true",
-        help = "output requirement string only "
-                  "(output may be used by conda create --file)",
+        action="store_true",
+        help="Output requirement string only (output may be used by "
+             " conda create --file).",
+    )
+    p.add_argument(
+        '-r', "--revisions",
+        action="store_true",
+        help="List the revision history and exit.",
     )
     p.add_argument(
         "--no-pip",
-        action = "store_false",
+        action="store_false",
         default=True,
         dest="pip",
-        help = "Do not include pip-only installed packages")
+        help="Do not include pip-only installed packages.")
     p.add_argument(
         'regex',
-        action = "store",
-        nargs = "?",
-        help = "list only packages matching this regular expression",
+        action="store",
+        nargs="?",
+        help="List only packages matching this regular expression.",
     )
     p.set_defaults(func=execute)
 
@@ -55,92 +108,112 @@ def configure_parser(sub_parsers):
 def print_export_header():
     print('# This file may be used to create an environment using:')
     print('# $ conda create --name <env> --file <this file>')
-    print('# platform: %s' % config.subdir)
+    print('# platform: %s' % context.subdir)
 
 
-def add_pip_installed(prefix, installed):
-    from conda.from_pypi import pip_args
-
-    args = pip_args(prefix)
-    if args is None:
-        return
-    args.append('list')
-    try:
-        pipinst = subprocess.check_output(args).split('\n')
-    except Exception as e:
-        # Any error should just be ignored
-        print("""\
-# Warning: Your version of pip is older than what conda requires for pip
-# integration, so no pip-installed packages will be displayed.  Please
-# update pip, in environment: %s
-""" % prefix)
-        return
-
-    # For every package in pipinst that is not already represented
-    # in installed append a fake name to installed with 'pip'
-    # as the build string
-    conda_names = {d.rsplit('-', 2)[0] for d in installed}
-    pat = re.compile('([\w.-]+)\s+\(([\w.]+)')
-    for line in pipinst:
-        line = line.strip()
-        if not line:
-            continue
-        m = pat.match(line)
-        if m is None:
-            print('Could not extract name and version from: %r' % line)
-            continue
-        name, version = m.groups()
-        name = name.lower()
-        if name not in conda_names:
-            installed.add('%s-%s-<pip>' % (name, version))
-
-
-def list_packages(prefix, regex=None, format='human', piplist=True):
-    if not isdir(prefix):
-        sys.exit("""\
-Error: environment does not exist: %s
-#
-# Use 'conda create' to create an environment before listing its packages.""" % prefix)
+def get_packages(installed, regex):
     pat = re.compile(regex, re.I) if regex else None
-
-    if format == 'human':
-        print('# packages in environment at %s:' % prefix)
-        print('#')
-        res = 1
-    if format == 'export':
-        print_export_header()
-
-    installed = install.linked(prefix)
-    if piplist and config.use_pip and format == 'human':
-        add_pip_installed(prefix, installed)
-
-    for dist in sorted(installed):
-        name = dist.rsplit('-', 2)[0]
+    for dist in sorted(installed, key=lambda x: x.quad[0].lower()):
+        name = dist.quad[0]
         if pat and pat.search(name) is None:
             continue
-        res = 0
+
+        yield dist
+
+
+def list_packages(prefix, installed, regex=None, format='human',
+                  show_channel_urls=context.show_channel_urls):
+    res = 0
+    result = []
+    for dist in get_packages(installed, regex):
         if format == 'canonical':
-            print(dist)
+            result.append(dist)
             continue
         if format == 'export':
-            print('='.join(dist.rsplit('-', 2)))
+            result.append('='.join(dist.quad[:3]))
             continue
+
         try:
             # Returns None if no meta-file found (e.g. pip install)
-            info = install.is_linked(prefix, dist)
+            info = is_linked(prefix, dist)
             features = set(info.get('features', '').split())
-            print('%-25s %-15s %15s  %s' % (info['name'],
-                                            info['version'],
-                                            info['build'],
-                                            common.disp_features(features)))
-        except: # IOError, KeyError, ValueError
-            print('%-25s %-15s %15s' % tuple(dist.rsplit('-', 2)))
+            disp = '%(name)-25s %(version)-15s %(build)15s' % info
+            disp += '  %s' % disp_features(features)
+            schannel = info.get('schannel')
+            if (show_channel_urls or show_channel_urls is None
+                    and schannel != DEFAULTS_CHANNEL_NAME):
+                disp += '  %s' % schannel
+            result.append(disp)
+        except (AttributeError, IOError, KeyError, ValueError) as e:
+            log.debug("exception for dist %s:\n%r", dist, e)
+            result.append('%-25s %-15s %15s' % tuple(dist.quad[:3]))
 
-    return res
+    return res, result
+
+
+def print_packages(prefix, regex=None, format='human', piplist=False,
+                   json=False, show_channel_urls=context.show_channel_urls):
+    if not isdir(prefix):
+        raise CondaEnvironmentNotFoundError(prefix)
+
+    if not json:
+        if format == 'human':
+            print('# packages in environment at %s:' % prefix)
+            print('#')
+        if format == 'export':
+            print_export_header()
+
+    installed = linked(prefix)
+    log.debug("installed conda packages:\n%s", installed)
+    if piplist and context.use_pip and format == 'human':
+        other_python = get_egg_info(prefix)
+        log.debug("other installed python packages:\n%s", other_python)
+        installed.update(other_python)
+
+    exitcode, output = list_packages(prefix, installed, regex, format=format,
+                                     show_channel_urls=show_channel_urls)
+    if not json:
+        print('\n'.join(map(text_type, output)))
+    else:
+        stdout_json(output)
+    return exitcode
+
+
+def print_explicit(prefix, add_md5=False):
+    if not isdir(prefix):
+        raise CondaEnvironmentNotFoundError(prefix)
+    print_export_header()
+    print("@EXPLICIT")
+    for meta in sorted(linked_data(prefix).values(), key=lambda x: x['name']):
+        url = meta.get('url')
+        if not url or url.startswith(UNKNOWN_CHANNEL):
+            print('# no URL for: %s' % meta['fn'])
+            continue
+        md5 = meta.get('md5')
+        print(url + ('#%s' % md5 if add_md5 and md5 else ''))
 
 
 def execute(args, parser):
-    prefix = common.get_prefix(args)
+    prefix = context.prefix_w_legacy_search
+    regex = args.regex
+    if args.full_name:
+        regex = r'^%s$' % regex
+
+    if args.revisions:
+        from conda.history import History
+        h = History(prefix)
+        if isfile(h.path):
+            if not context.json:
+                h.print_log()
+            else:
+                stdout_json(h.object_log())
+        else:
+            raise CondaFileNotFoundError(h.path)
+        return
+
+    if args.explicit:
+        print_explicit(prefix, args.md5)
+        return
 
     if args.canonical:
         format = 'canonical'
@@ -148,4 +221,10 @@ def execute(args, parser):
         format = 'export'
     else:
         format = 'human'
-    sys.exit(list_packages(prefix, args.regex, format=format, piplist=args.pip))
+    if context.json:
+        format = 'canonical'
+
+    exitcode = print_packages(prefix, regex, format, piplist=args.pip,
+                              json=context.json,
+                              show_channel_urls=context.show_channel_urls)
+    return exitcode

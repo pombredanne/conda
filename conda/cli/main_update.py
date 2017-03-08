@@ -4,90 +4,63 @@
 # conda is distributed under the terms of the BSD 3-clause license.
 # Consult LICENSE.txt or http://opensource.org/licenses/BSD-3-Clause.
 
-from __future__ import print_function, division, absolute_import
+from __future__ import absolute_import, division, print_function, unicode_literals
 
-from argparse import RawDescriptionHelpFormatter
+from .common import add_parser_install, add_parser_json
+from .install import install
+from ..gateways.disk.delete import delete_trash
 
-from conda.cli import common
+help = "Updates conda packages to the latest compatible version."
+descr = help + """
 
+This command accepts a list of package names and updates them to the latest
+versions that are compatible with all other packages in the environment.
 
-descr = "Update conda packages."
+Conda attempts to install the newest versions of the requested packages. To
+accomplish this, it may update some packages that are already installed, or
+install additional packages. To prevent existing packages from updating,
+use the --no-update-deps option. This may force conda to install older
+versions of the requested packages, and it does not prevent additional
+dependency packages from being installed.
+
+If you wish to skip dependency checking altogether, use the '--force'
+option. This may result in an environment with incompatible packages, so
+this option must be used with great caution.
+"""
 example = """
-examples:
-    conda update -p ~/anaconda/envs/myenv scipy
+Examples:
+
+    conda %s -n myenv scipy
 
 """
 
-def configure_parser(sub_parsers):
-    p = sub_parsers.add_parser(
-        'update',
-        formatter_class = RawDescriptionHelpFormatter,
-        description = descr,
-        help = descr,
-        epilog = example,
-    )
-    common.add_parser_yes(p)
-    common.add_parser_prefix(p)
-    common.add_parser_quiet(p)
+alias_help = "Alias for conda update.  See conda update --help."
+
+def configure_parser(sub_parsers, name='update'):
+    if name == 'update':
+        p = sub_parsers.add_parser(
+            'update',
+            description=descr,
+            help=descr,
+            epilog=example % name,
+        )
+    else:
+        p = sub_parsers.add_parser(
+            name,
+            description=alias_help,
+            help=alias_help,
+            epilog=example % name,
+        )
+    add_parser_install(p)
+    add_parser_json(p)
     p.add_argument(
-        'pkg_names',
-        metavar = 'package_name',
-        action = "store",
-        nargs = '*',
-        help = "names of packages to update",
+        "--all",
+        action="store_true",
+        help="Update all installed packages in the environment.",
     )
-    common.add_parser_channels(p)
     p.set_defaults(func=execute)
 
 
 def execute(args, parser):
-    import sys
-
-    import conda.install as ci
-    import conda.config as config
-    import conda.plan as plan
-    from conda.api import get_index
-
-    from conda.cli import pscheck
-
-
-    if len(args.pkg_names) == 0:
-        sys.exit("""Error: no package names supplied
-# If you want to update to a newer version of Anaconda, type:
-#
-# $ conda update anaconda
-""")
-
-    prefix = common.get_prefix(args)
-    config.set_pkgs_dirs(prefix)
-    linked = set(ci.name_dist(d) for d in ci.linked(prefix))
-    for name in args.pkg_names:
-        common.arg2spec(name)
-        if '=' in name:
-            sys.exit("Invalid package name: '%s'" % (name))
-        if name not in linked:
-            sys.exit("Error: package '%s' is not installed in %s" %
-                     (name, prefix))
-
-    common.ensure_override_channels_requires_channel(args)
-    channel_urls = args.channel or ()
-    index = get_index(channel_urls=channel_urls,
-                      prepend=not args.override_channels)
-    actions = plan.install_actions(prefix, index, args.pkg_names)
-
-    if plan.nothing_to_do(actions):
-        from conda.cli.main_list import list_packages
-
-        regex = '^(%s)$' %  '|'.join(args.pkg_names)
-        print('# All packages already at latest version, nothing to do.')
-        list_packages(prefix, regex)
-        return
-
-    print("Updating conda environment at %s" % prefix)
-    plan.display_actions(actions, index)
-    common.check_write('update', prefix)
-
-    if not pscheck.main(args):
-        common.confirm_yn(args)
-
-    plan.execute_actions(actions, index, verbose=not args.quiet)
+    install(args, parser, 'update')
+    delete_trash()
